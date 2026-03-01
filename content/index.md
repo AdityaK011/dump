@@ -6,4 +6,4 @@ Welcome to my digital garden — a collection of notes, reading plans, and ideas
 
 ## Notes
 
-- [[AI_Platform_Engineer_Reading_Plan|AI Platform Engineer Reading Plan]] — A 16-week structured reading plan covering distributed systems, data pipelines, ML systems, and AI infrastructure.
+- [[AI_Platform_Engineer_Reading_Plan|AI Platform Engineer Reading Plan]] — A structured reading plan covering distributed systems, data pipelines, ML systems, and AI infrastructure.

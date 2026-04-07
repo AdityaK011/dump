@@ -11,6 +11,7 @@ Welcome to my digital garden — a collection of notes, reading plans, and ideas
 
 ## Topics
 
-- [[notes/K8s/index|Kubernetes]] — GKE internals, networking, autoscaling, service mesh, and tooling
-- [[notes/Networking/index|Networking]] — Cellular networks, DNS privacy, QUIC, MASQUE, and iCloud Private Relay
+- [[notes/K8s/index|Kubernetes]] — GKE internals, networking, autoscaling, service mesh, operators, and tooling
+- [[notes/Networking/index|Networking]] — TCP internals, TLS, HTTP/gRPC, cellular networks, DNS privacy, QUIC
+- [[notes/AuthNZ/index|AuthNZ]] — OAuth, OIDC, Workload Identity Federation, and token management
 - [[notes/Learning/index|Learning]] — Reading plans and study guides

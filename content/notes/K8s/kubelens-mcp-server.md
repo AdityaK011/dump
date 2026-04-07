@@ -1,15 +1,5 @@
 ---
 title: "KubeLens: Building a Kubernetes MCP Server from Scratch"
-date: 2026-03-20
-tags:
-  - kubernetes
-  - mcp
-  - go
-  - client-go
-  - architecture
-  - gke
-  - authentication
-draft: false
 ---
 
 What happens when you give an LLM direct, read-only access to a Kubernetes cluster? Not through a shell that runs `kubectl` commands -- through a purpose-built server that speaks the Model Context Protocol (MCP) and hands back structured data. That is KubeLens: a Go server that bridges Claude (or any MCP-capable LLM client) to the Kubernetes API, with a design that is stateless, multi-cluster, and deliberately read-only.
@@ -245,3 +235,9 @@ Authentication via `gcloud auth print-access-token` worked seamlessly. The token
 4. **Returning summaries instead of raw API objects is critical for LLM tool design.** The model's context window is finite and its attention is not unlimited. Give it the signal, not the noise.
 
 5. **The dynamic client unlocks CRD access without code generation.** You do not need to run `client-gen` for every CRD in your cluster. `dynamic.Interface` with a `schema.GroupVersionResource` handles arbitrary resources at runtime.
+
+---
+
+## Related Notes
+
+- [[notes/K8s/interactive-containers-piping-and-ttys|Interactive Containers, Piping, and TTYs in Kubernetes]]

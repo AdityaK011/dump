@@ -1,4 +1,6 @@
-# AI Platform Engineer — 16-Week Serialized Reading Plan
+---
+title: "AI Platform Engineer — 16-Week Reading Plan"
+---
 
 > **How to use this:** Follow one reading per day, Monday through Friday. Each week has a theme. Readings are sequenced so that concepts build on each other — don't skip ahead. Check off items as you go. Weekends are for the side project.
 

@@ -1,14 +1,5 @@
 ---
 title: "Interactive Containers, Piping, and TTYs in Kubernetes"
-date: 2026-04-02
-tags:
-  - kubernetes
-  - linux
-  - tty
-  - containers
-  - unix
-  - networking
-draft: false
 ---
 
 What actually happens when you `kubectl exec`, `attach`, or try to pipe into a running container? Starting from "how do I make a CLI interactive in a cluster" and ending up at the Unix fundamentals that make it all possible.
@@ -99,3 +90,9 @@ The process has no idea whether it's talking to a real 1970s teletypewriter, a m
 ---
 
 *Written from a conversation exploring how interactive processes work in Kubernetes -- starting from "how do I host an agent" and ending up at the Unix fundamentals that make it all possible.*
+
+---
+
+## Related Notes
+
+- [[notes/K8s/kubelens-mcp-server|KubeLens MCP Server]]

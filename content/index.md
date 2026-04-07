@@ -4,6 +4,13 @@ title: Thinking Out Loud
 
 Welcome to my digital garden — a collection of notes, reading plans, and ideas I'm exploring.
 
-## Notes
+## Browse
 
-- [[AI_Platform_Engineer_Reading_Plan|AI Platform Engineer Reading Plan]] — A structured reading plan covering distributed systems, data pipelines, ML systems, and AI infrastructure.
+- [[notes/index|Notes]] — Detailed technical notes organized by topic
+- [[summaries/index|Summaries]] — Quick-reference versions of every note
+
+## Topics
+
+- [[notes/K8s/index|Kubernetes]] — GKE internals, networking, autoscaling, service mesh, and tooling
+- [[notes/Networking/index|Networking]] — Cellular networks, DNS privacy, QUIC, MASQUE, and iCloud Private Relay
+- [[notes/Learning/index|Learning]] — Reading plans and study guides

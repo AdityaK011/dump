@@ -43,3 +43,9 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | Summary | Full Note |
 |---------|-----------|
 | [[summaries/Learning/ai-platform-engineer-reading-plan\|AI Platform Engineer Reading Plan]] | [[notes/Learning/ai-platform-engineer-reading-plan\|Full notes -->]] |
+
+## AI Tooling
+
+| Summary | Full Note |
+|---------|-----------|
+| [[summaries/AI-Tooling/claude-code-internals\|Claude Code Internals]] | [[notes/AI-Tooling/claude-code-internals\|Full notes -->]] |

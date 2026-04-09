@@ -241,3 +241,4 @@ Authentication via `gcloud auth print-access-token` worked seamlessly. The token
 ## Related Notes
 
 - [[notes/K8s/interactive-containers-piping-and-ttys|Interactive Containers, Piping, and TTYs in Kubernetes]]
+- [[notes/AI-Tooling/claude-code-internals|Claude Code Internals -- Skills, Agents, Hooks, and the Plugin System]]

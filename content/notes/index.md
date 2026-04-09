@@ -10,3 +10,4 @@ Detailed technical notes organized by topic.
 - [[notes/Networking/index|Networking]] — TCP internals, TLS, HTTP/gRPC, protocols, privacy, and transport layers
 - [[notes/AuthNZ/index|AuthNZ]] — OAuth, OIDC, JWT, Workload Identity Federation, and token management
 - [[notes/Learning/index|Learning]] — Reading plans and study guides
+- [[notes/AI-Tooling/index|AI Tooling]] — Claude Code internals, agent frameworks, and LLM infrastructure

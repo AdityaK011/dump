@@ -15,3 +15,4 @@ Welcome to my digital garden — a collection of notes, reading plans, and ideas
 - [[notes/Networking/index|Networking]] — TCP internals, TLS, HTTP/gRPC, cellular networks, DNS privacy, QUIC
 - [[notes/AuthNZ/index|AuthNZ]] — OAuth, OIDC, Workload Identity Federation, and token management
 - [[notes/Learning/index|Learning]] — Reading plans and study guides
+- [[notes/AI-Tooling/index|AI Tooling]] — Claude Code internals, agent frameworks, LLM infrastructure

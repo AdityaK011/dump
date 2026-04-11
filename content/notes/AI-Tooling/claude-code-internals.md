@@ -4,7 +4,7 @@ title: "Claude Code Internals -- Skills, Agents, Hooks, and the Plugin System"
 
 Claude Code is not just an LLM chatbot with file access. It is a programmable agent runtime with a proper extension architecture -- skills, agents, hooks, plugins, and marketplaces -- that turns a single LLM session into a multi-agent orchestration system. Understanding these internals matters because the way you configure and extend Claude Code directly determines whether it behaves like a dumb autocomplete or a genuine engineering partner.
 
-This note is based on hands-on exploration of the `~/.claude/` directory, the plugin cache, marketplace registries, and real-world plugin structures (including `asdd-kit` and `superpowers`). The goal is to document how it all fits together, because the official docs are thin on the architecture side.
+This note is based on hands-on exploration of the `~/.claude/` directory, the plugin cache, marketplace registries, and real-world plugin structures (including `superpowers`). The goal is to document how it all fits together, because the official docs are thin on the architecture side.
 
 ## The Big Picture
 
@@ -199,24 +199,7 @@ But the agent itself can exist independently. You can invoke an agent directly f
 
 ### Plugin Agents
 
-Plugins ship agents too. The `asdd-kit` plugin includes 14 agents:
-
-```
-asdd-kit/agents/
-  code-explorer.md       # Read-only codebase analysis
-  code-reviewer.md       # Code review with specific rubrics
-  figma-codegen.md       # Generate code from Figma designs
-  jira-crawler.md        # Extract data from Jira
-  reconciler.md          # Verify code matches spec
-  security-agent.md      # Security audit
-  slack-crawler.md       # Extract context from Slack
-  spec-drafter.md        # Draft agent specifications
-  spec-reviewer.md       # Review specs for completeness
-  test-runner.md         # Run tests in isolation
-  ...
-```
-
-Each agent has a constrained tool list. The `reconciler` agent, for instance, is deliberately limited:
+Plugins ship agents too. A plugin might include multiple agents, each with a constrained tool list. A read-only verification agent, for instance, might be deliberately limited:
 
 ```yaml
 tools: Glob, Grep, Read, Bash, BashOutput
@@ -358,28 +341,28 @@ A plugin is a git repository that bundles skills, agents, hooks, and commands in
 
 ```json
 {
-  "name": "asdd-kit",
-  "version": "0.4.20260331175938",
-  "description": "Agent Spec Driven Development Kit",
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "My custom plugin",
   "agents": [
-    "./plugins/asdd-kit/agents/figma-codegen.md",
-    "./plugins/asdd-kit/agents/reconciler.md",
+    "./plugins/my-plugin/agents/code-reviewer.md",
+    "./plugins/my-plugin/agents/reconciler.md",
     ...
   ],
-  "commands": "./plugins/asdd-kit/commands/"
+  "commands": "./plugins/my-plugin/commands/"
 }
 ```
 
 The directory structure of a plugin looks like:
 
 ```
-asdd-kit/
+my-plugin/
   .claude-plugin/
     plugin.json           # Plugin manifest
     marketplace.json      # If this plugin IS a marketplace
   .claude/
     settings.json         # Plugin's own settings (can depend on other plugins)
-  plugins/asdd-kit/
+  plugins/my-plugin/
     agents/               # Agent markdown files
     skills/               # Skill directories with SKILL.md
     commands/             # Slash-command definitions
@@ -391,17 +374,17 @@ asdd-kit/
 Commands are markdown files that define slash-commands the user can invoke. They are distinct from skills -- a command is a user-triggered workflow, while a skill is model-triggered knowledge.
 
 ```yaml
-# commands/kick.md
+# commands/deploy.md
 ---
-name: asdd-kit:kick
-description: "Implements a single task from an Agent Spec document."
+name: my-plugin:deploy
+description: "Run a staged deployment with pre-flight checks."
 ---
 
-# Implements a single task from an Agent Spec document
+# Run a staged deployment with pre-flight checks
 ...
 ```
 
-The user invokes it as `/asdd-kit:kick` in the Claude Code prompt. The command's body becomes the task instruction. Commands can reference agents, skills, and tools within their workflow.
+The user invokes it as `/my-plugin:deploy` in the Claude Code prompt. The command's body becomes the task instruction. Commands can reference agents, skills, and tools within their workflow.
 
 ### What Is a Marketplace?
 
@@ -439,7 +422,7 @@ Plugins in a marketplace can come from three source types:
 |------------|---------|------------|
 | `./path` | `"source": "./plugins/ds4-web"` | Relative to marketplace repo |
 | `url` | `"source": {"source": "url", "url": "https://github.com/..."}` | External git repo |
-| `github` | `"source": {"source": "github", "repo": "kouzoh/asdd-kit"}` | GitHub shorthand |
+| `github` | `"source": {"source": "github", "repo": "my-org/my-plugin"}` | GitHub shorthand |
 | `git-subdir` | `"source": {"source": "git-subdir", "url": "...", "path": "plugins/foo"}` | Subdirectory of a git repo |
 
 ### Official vs. Self-Hosted Marketplaces
@@ -455,10 +438,10 @@ But you can register additional marketplaces in `settings.json`:
 ```json
 {
   "extraKnownMarketplaces": {
-    "coding-agent-plugins": {
+    "my-org-plugins": {
       "source": {
         "source": "github",
-        "repo": "kouzoh/coding-agent-plugins"
+        "repo": "my-org/claude-plugins"
       }
     }
   }
@@ -479,14 +462,14 @@ The marketplace metadata is cached locally:
         marketplace.json          # The plugin catalog
       plugins/                    # Bundled plugins
       external_plugins/           # Plugins with external sources
-    coding-agent-plugins/         # Self-hosted marketplace
+    my-org-plugins/               # Self-hosted marketplace
       .claude-plugin/
         marketplace.json
   cache/
     claude-plugins-official/
       superpowers/5.0.7/          # Installed plugin at specific version
-    coding-agent-plugins/
-      asdd-kit/0.4.20260331175938/
+    my-org-plugins/
+      my-plugin/1.0.0/
 ```
 
 ### Installation and Versioning
@@ -500,12 +483,12 @@ When you install a plugin, Claude Code:
 
 ```json
 {
-  "asdd-kit@coding-agent-plugins": [
+  "my-plugin@my-org-plugins": [
     {
       "scope": "user",
-      "installPath": "~/.claude/plugins/cache/coding-agent-plugins/asdd-kit/0.4.20260331175938",
-      "version": "0.4.20260331175938",
-      "gitCommitSha": "ca2740e49c8df2d2352cd96e515c3d171db6dca3"
+      "installPath": "~/.claude/plugins/cache/my-org-plugins/my-plugin/1.0.0",
+      "version": "1.0.0",
+      "gitCommitSha": "abc123def456..."
     }
   ]
 }
@@ -520,7 +503,7 @@ Installing is not the same as enabling. You enable plugins in `settings.json`:
 ```json
 {
   "enabledPlugins": {
-    "asdd-kit@coding-agent-plugins": true,
+    "my-plugin@my-org-plugins": true,
     "superpowers@claude-plugins-official": true
   }
 }
@@ -631,27 +614,26 @@ Agent updates indexes (Edit)
 Result returned to main session
 ```
 
-### Practical Example: Terraform Work with asdd-kit
+### Practical Example: Multi-Agent Orchestration via Plugin Command
 
-When working on `gke-cluster-kit` terraform configuration, the `asdd-kit` plugin's workflow looks like:
+A plugin command can orchestrate multiple agents with constrained capabilities:
 
 ```
-/asdd-kit:kick
+/my-plugin:implement
   |
   v
-Command: kick.md loaded
+Command: implement.md loaded
   |
   v
 Pre-flight checks:
-  - .asdd-kit/config exists?
+  - Config exists?
   - Load spec path, task ID
   |
   v
-Dispatch implementer sub-agent
+Dispatch implementer sub-agent (full tools)
   |
   v
-Sub-agent reads spec, implements terraform changes
-Sub-agent commits code
+Sub-agent reads spec, implements changes, commits code
   |
   v
 Dispatch reconciler agent (read-only)
@@ -659,7 +641,7 @@ Dispatch reconciler agent (read-only)
   - Reports discrepancies without modifying code
   |
   v
-Dispatch code reviewer agent
+Dispatch code reviewer agent (read-only)
   - Reviews quality, patterns, security
   |
   v
@@ -719,11 +701,11 @@ This is intentional -- it keeps the dependency graph explicit and prevents circu
 
 ### Pattern: Read-Only Agents for Verification
 
-Both `asdd-kit` and `superpowers` use agents with deliberately limited tool access for verification tasks. The reconciler agent has no Write or Edit tools. The code reviewer agent is read-only. This is enforced at the runtime level, not by prompt instruction.
+Well-designed plugins use agents with deliberately limited tool access for verification tasks. A reconciler agent might have no Write or Edit tools. A code reviewer agent is read-only. This is enforced at the runtime level, not by prompt instruction.
 
 ### Gotcha: Plugin Settings Can Reference Other Plugins
 
-The `asdd-kit` plugin's own `.claude/settings.json` enables another plugin:
+A plugin's own `.claude/settings.json` can enable other plugins:
 
 ```json
 {
@@ -813,7 +795,7 @@ By restricting skills to knowledge injection only, the architecture ensures that
 
 ### Q: How would you design a Claude Code plugin for a platform engineering team managing Terraform infrastructure?
 
-**A:** Based on the patterns I have seen in `asdd-kit` and `superpowers`, here is what I would include:
+**A:** Based on the patterns seen in well-designed plugins like `superpowers`, here is what I would include:
 
 **Skills:**
 - `terraform-plan-review` -- knowledge about how to read and analyze terraform plan output, common gotchas (state drift, provider version conflicts, resource recreation vs. in-place update)

@@ -2,89 +2,88 @@
 title: "Summary: KubeLens MCP Server"
 ---
 
-> **Full notes:** [[notes/K8s/kubelens-mcp-server|KubeLens: Building a Kubernetes MCP Server from Scratch -->]]
+> **Full notes:** [[notes/K8s/kubelens-mcp-server|KubeLens: Building a Kubernetes MCP Server with OAuth 2.0 and StreamableHTTP -->]]
 
 ## Key Concepts
 
-### Why Not kubectl?
-- kubectl output is unstructured (human-formatted tables)
-- No safety boundary (LLM could run `kubectl delete`)
-- Auth coupled to single machine's kubeconfig
-- No formal schema for LLM tool discovery
-- KubeLens: JSON responses, read-only, per-request auth, JSON Schema per tool
+### Architecture
+- **MCP over StreamableHTTP** -- single `POST /mcp` endpoint, JSON-RPC 2.0 (NOT REST)
+- Two MCP objects: `MCPServer` (protocol engine, tool registry) + `StreamableHTTPServer` (HTTP adapter, `http.Handler`)
+- Middleware chain: `recoverMiddleware` -> `corsMiddleware` -> `mux` -> `oauth.Middleware` (for /mcp) -> `StreamableHTTPServer`
+- **6 tools**, all read-only: `list_clusters`, `list_pods`, `describe_pod`, `get_pod_logs`, `get_events`, `get_nodes`
 
-### MCP Protocol (SSE Transport)
-- `GET /sse` -- long-lived SSE connection, signals where to POST
-- `POST /mcp` -- stateless JSON-RPC 2.0 calls (actual work)
-- Methods: `initialize`, `notifications/initialized`, `tools/list`, `tools/call`
-- Protocol version: `2024-11-05`
-- Tool call timeout: **30 seconds**
+### Auth: OAuth 2.0 Proxy with Dynamic Client Registration
+- **Two client_ids**: MCP client_id (app identity, from `POST /register`) vs Google client_id (server identity, env var)
+- `client_id` identifies the APP, not the user. User identity from Google login -> session
+- **Dynamic Client Registration (RFC 7591)**: `POST /register` -> returns `client_id`. Reused across logins
+- **PKCE (RFC 7636)**: `S256` enforced. Prevents auth code interception
+- **Loopback redirect URIs only** -- port-agnostic matching per RFC 8252 s7.3
+- **Public clients** (`token_endpoint_auth_method: "none"`) = no secret. CLI tools like Claude Code
+- Session ID = opaque 64-char hex. NOT a JWT. Google tokens live server-side only
 
-### Authentication Design
-- Bypasses kubeconfig entirely -- accepts raw `api_server` + `token` per request
-- Bare `rest.Config{Host, BearerToken}` -- no token rotation, no exec plugins
-- **Stateless**: no user sessions, each request self-contained
-- **Multi-cluster**: consecutive calls can target different clusters
-- Caller responsible for token refresh (GKE tokens expire ~1 hour)
-- TLS: `ca_cert` (base64 PEM) takes precedence over `insecure: true`
+### Session Management (In-Memory Store)
+- 4 maps, each with own `sync.RWMutex`: sessions (24h), pending (5 min), codes (5 min), clients (no TTL)
+- **One-time use**: pending auth + auth codes deleted on read
+- **`ClientID` flows through chain**: PendingAuth -> AuthCode -> validated at `/token`
+- Background cleanup goroutine every **10 minutes**
+- Token refresh: `singleflight.Group` keyed by session ID -- 1 goroutine calls Google, others wait
 
-### Client Caching
-- Cache key: `apiServer + "|" + sha256(token)[:8]`
-- TTL: **5 minutes**
-- Token rotation = new cache key = new client automatically (no explicit invalidation)
-- Protected by `sync.Mutex` (not RWMutex -- critical section is tiny)
+### K8s Client Layer
+- No pre-configured cluster. Tool params: `project`, `location`, `cluster`
+- **Cluster details cache**: endpoint + CA, keyed by `project/location/cluster`, **10 min TTL**, `sync.RWMutex`
+- `kubernetes.NewForConfig` per-request is cheap -- just wrapper structs
+- **Transport cache**: client-go's `tlsTransportCache` pools HTTP/2 connections. `BearerToken` NOT in cache key -- multi-user shares connections
 
-### Dual Client Pattern
-- **Typed client** (`kubernetes.Interface`): core resources (Pods, Namespaces, Events, Deployments, Nodes) -- compile-time type safety
-- **Dynamic client** (`dynamic.Interface`): CRDs via arbitrary GVR, returns `unstructured.Unstructured` -- no code generation needed
-
-### Tool Design Philosophy
-- Return **structured summaries**, not raw K8s API objects
-- Pod summary: name, phase, ready, restarts, node, message (vs dozens of raw fields)
-- `mergeProps()` for DRY auth field injection across all tool schemas
-- `get_events` uses server-side `FieldSelector: "type=Warning"` for efficiency
-
-### The 8 Tools
-- `list_namespaces` -- cluster-scoped
-- `list_pods` -- podSummary with restart aggregation
-- `get_pod_logs` -- tail-based, default 100 lines
-- `get_events` -- server-side Warning filter
-- `list_deployments` -- desired/ready/available counts
-- `list_nodes` -- full condition map
-- `list_crds` -- dynamic client, apiextensions.k8s.io GVR
-- `get_crd_instances` -- dynamic client, arbitrary GVR
+### Security Hardening
+- **Rate limiting**: 10 req/min per IP, token bucket (burst 5, refill 1/6s). Shared across all auth endpoints
+- **Redirect URI validation**: loopback only (`127.0.0.1`, `::1`, `localhost`)
+- **Input validation**: compiled regex for project ID, location, cluster name
+- **Log cap**: `io.LimitReader(stream, 1MB)` prevents OOM
+- **Panic recovery**: `recoverMiddleware` catches panics, returns 500
+- **CORS rejection**: OPTIONS -> 403. `X-Content-Type-Options: nosniff`
+- **Scheme detection**: `X-Forwarded-Proto` only when `TRUST_PROXY=true`
 
 ### HTTP Server Config
-- ReadTimeout: **10s** (small JSON-RPC bodies)
-- WriteTimeout: **60s** (large K8s API responses)
-- Router: standard `http.NewServeMux` (2 endpoints, no framework needed)
-- No pagination on list operations (fine for debugging, not production scraping)
+- `ReadHeaderTimeout: 10s` (slowloris protection)
+- `IdleTimeout: 120s` (keep-alive cleanup)
+- **WriteTimeout omitted** -- SSE streams stay open indefinitely
+- Graceful shutdown: SIGTERM/SIGINT -> 15s drain via `srv.Shutdown`
+
+### Pagination Limits
+- Pods: **500**, Events: **200** (display top 50), Nodes: **500**
+- Log streaming: **60s timeout**, **1 MB cap**
+- Default tool timeout: **30s**
 
 ## Quick Reference
 
 ```
-MCP SSE Handshake:
-  Client --GET /sse--> Server
-  Server --SSE event: endpoint /mcp--> Client
-  Client --POST /mcp (initialize)--> Server
-  Client --POST /mcp (tools/list)--> Server  (gets 8 tools)
-  Client --POST /mcp (tools/call)--> Server  (actual work)
+Auth Flow:
+  1. GET /.well-known/oauth-authorization-server  (discovery)
+  2. POST /register  { redirect_uris, client_name }  -> client_id
+  3. GET /authorize?client_id=...&code_challenge=...  -> Google login
+  4. GET /callback  (Google redirects back, server creates session)
+  5. POST /token  { code, code_verifier, client_id }  -> session_id
+  6. POST /mcp  Authorization: Bearer <session_id>    -> tool calls
 
-Auth Flow (per request):
-  Caller: gcloud auth print-access-token -> token
-  Tool call: {api_server, token, ...params}
-  Server: rest.Config{Host: api_server, BearerToken: token}
-  Cache: sha256(token)[:8] as key, 5min TTL
+Two client_ids:
+  Claude Code --(MCP client_id)--> KubeLens --(Google client_id)--> Google
 
-Client config (Claude Code):
-  {
-    "mcpServers": {
-      "kubelens": { "type": "sse", "url": "http://localhost:8080/sse" }
-    }
-  }
+In-Memory Store:
+  sessions:  session_id   -> Google tokens      (24h TTL)
+  pending:   pending_key  -> PKCE + redirect    (5 min, one-time)
+  codes:     auth_code    -> session_id         (5 min, one-time)
+  clients:   client_id    -> registered client  (no TTL)
 
-Scale tested:
-  1,018 nodes        (list_nodes)
-  245 CRDs           (list_crds)
-  537 VirtualServices (get_crd_instances)
+v1 -> v2 Changes:
+  SSE transport         -> StreamableHTTP
+  Raw token per request -> OAuth 2.0 proxy + sessions
+  8 tools               -> 6 tools
+  No rate limiting      -> 10 req/min per IP
+  No shutdown handling  -> SIGTERM + 15s drain
+  Token in LLM context  -> Token server-side only
+
+Deployment:
+  distroless/static-debian12:nonroot
+  CGO_ENABLED=0 (static binary)
+  Env: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, REDIRECT_URL
 ```

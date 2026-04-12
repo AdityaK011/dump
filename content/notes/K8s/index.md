@@ -24,4 +24,4 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 - [[notes/K8s/interactive-containers-piping-and-ttys|Interactive Containers, Piping & TTYs]] — How kubectl exec/attach works, Unix pipes, and the TTY abstraction
 
 ## Tooling
-- [[notes/K8s/kubelens-mcp-server|KubeLens MCP Server]] — Building a Kubernetes MCP server with stateless auth, client caching, and structured tool design
+- [[notes/K8s/kubelens-mcp-server|KubeLens MCP Server]] — Building a Kubernetes MCP server with OAuth 2.0 proxy, Dynamic Client Registration, StreamableHTTP transport, and structured read-only tools

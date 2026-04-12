@@ -684,3 +684,9 @@ Quick troubleshooting:
 - [SAML 2.0 Technical Overview (OASIS)](http://docs.oasis-open.org/security/saml/Post2.0/sstc-saml-tech-overview-2.0.html)
 - [Google Workload Identity Federation Docs](https://cloud.google.com/iam/docs/workload-identity-federation)
 - [GitHub OIDC Documentation](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
+
+---
+
+## Related Notes
+
+- [[notes/K8s/kubelens-mcp-server|KubeLens MCP Server]] -- practical implementation of OAuth 2.0 proxy with Dynamic Client Registration (RFC 7591), PKCE (RFC 7636), and server-side session management in Go

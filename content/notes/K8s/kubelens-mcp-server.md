@@ -1,10 +1,12 @@
 ---
-title: "KubeLens: Building a Kubernetes MCP Server from Scratch"
+title: "KubeLens: Building a Kubernetes MCP Server with OAuth 2.0 and StreamableHTTP"
 ---
 
-What happens when you give an LLM direct, read-only access to a Kubernetes cluster? Not through a shell that runs `kubectl` commands -- through a purpose-built server that speaks the Model Context Protocol (MCP) and hands back structured data. That is KubeLens: a Go server that bridges Claude (or any MCP-capable LLM client) to the Kubernetes API, with a design that is stateless, multi-cluster, and deliberately read-only.
+What happens when you give an LLM direct, read-only access to a Kubernetes cluster? Not through a shell that runs `kubectl` commands -- through a purpose-built server that speaks the Model Context Protocol (MCP) and hands back structured data. That is KubeLens: a Go server that bridges Claude Code (or any MCP-capable client) to GKE clusters, with OAuth 2.0 authentication that proxies the user's Google identity to the Kubernetes API.
 
-This post is a full architectural walkthrough. We will cover the MCP protocol mechanics, the authentication flow (especially the non-obvious parts around GKE), the client-go patterns that differ from textbook usage, networking decisions, and the client caching strategy.
+This post is a complete architectural walkthrough of the rearchitected version. The original design used SSE transport and accepted raw tokens per-request. The current system uses StreamableHTTP transport, implements a full OAuth 2.0 authorization server with Dynamic Client Registration (RFC 7591), PKCE (RFC 7636), and server-side session management. Everything changed except the core idea: give LLMs structured, read-only Kubernetes access.
+
+---
 
 ## Why Not Just Shell Out to kubectl?
 
@@ -15,230 +17,587 @@ The obvious approach to giving an LLM Kubernetes access is to let it run `kubect
 3. **Auth coupling.** kubectl reads `~/.kube/config`, which ties you to a single machine's credential setup.
 4. **No schema.** The LLM has no formal description of what parameters each operation accepts.
 
-KubeLens solves all four: it returns JSON, it only exposes read operations, it takes auth credentials per-request, and it advertises a JSON Schema for every tool.
+KubeLens solves all four: it returns structured text, it only exposes read operations, it takes auth via OAuth 2.0 (user logs in with Google, server proxies their identity), and it advertises a JSON Schema for every tool.
 
-## The MCP Protocol -- How the Handshake Works
+---
 
-MCP (Model Context Protocol) is Anthropic's standard for connecting LLMs to external tools over a network. KubeLens implements the **SSE transport variant**, which works like this:
+## Architecture Overview
+
+### Request Flow
+
+Every request traverses this middleware chain:
 
 ```
-Client                          Server (:8080)
-  |                                |
-  |--- GET /sse ------------------>|
-  |<-- event: endpoint             |
-  |    data: /mcp                  |
-  |                                |
-  |--- POST /mcp (initialize) --->|
-  |<-- {protocolVersion, ...}      |
-  |                                |
-  |--- POST /mcp (tools/list) --->|
-  |<-- {tools: [...8 tools]}       |
-  |                                |
-  |--- POST /mcp (tools/call) --->|
-  |<-- {content: [{text: "..."}]}  |
+HTTP request
+  |
+  v
+recoverMiddleware   (catches panics, returns 500)
+  |
+  v
+corsMiddleware      (rejects OPTIONS, sets nosniff)
+  |
+  v
+http.ServeMux       (routes by path)
+  |
+  +-- /.well-known/oauth-authorization-server  -->  handleMetadata (RFC 8414)
+  +-- POST /register                           -->  handleRegister (RFC 7591) [rate limited]
+  +-- GET  /authorize                          -->  handleAuthorize            [rate limited]
+  +-- GET  /callback                           -->  handleCallback             [rate limited]
+  +-- POST /token                              -->  handleToken                [rate limited]
+  +-- GET  /health                             -->  health check
+  +-- /mcp, /mcp/                              -->  oauth.Middleware --> StreamableHTTPServer
+                                                                           |
+                                                                           v
+                                                                       MCPServer
+                                                                           |
+                                                                           v
+                                                                     Tool Handler
 ```
 
-The SSE connection (`GET /sse`) is long-lived but carries almost no data -- it just tells the client where to send JSON-RPC requests. The actual work happens via stateless `POST /mcp` calls carrying JSON-RPC 2.0 payloads.
+### MCP Protocol Layer -- Two Objects That Look Similar
 
-On the server side, the SSE handler is minimal:
+The MCP library (`mcp-go v0.47`) provides two objects that are easy to confuse:
 
-```go
-func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
-    flusher, ok := w.(http.Flusher)
-    // ...
-    w.Header().Set("Content-Type", "text/event-stream")
-    w.Header().Set("Cache-Control", "no-cache")
-    w.Header().Set("Connection", "keep-alive")
+- **`server.MCPServer`** -- the protocol engine. It understands MCP messages (`initialize`, `tools/list`, `tools/call`), holds the tool registry, and dispatches to handlers. It knows nothing about HTTP.
+- **`server.StreamableHTTPServer`** -- the HTTP adapter. It implements `http.Handler`, translates HTTP request bodies into JSON-RPC messages, passes them to `MCPServer`, and writes responses back. It also handles SSE streaming for long-lived connections.
 
-    fmt.Fprintf(w, "event: endpoint\ndata: /mcp\n\n")
-    flusher.Flush()
+MCP is NOT REST. There is a single endpoint (`/mcp`) that speaks JSON-RPC 2.0. The tool name lives in the JSON body, not in the URL path. This is why there is no `/api/pods` or `/api/events` -- everything goes through `/mcp`.
 
-    <-r.Context().Done() // block until client disconnects
-}
+```
+Client                              Server (:8080)
+  |                                     |
+  |--- POST /mcp (initialize) -------->|
+  |<-- {protocolVersion: "2025-03-26"}  |
+  |                                     |
+  |--- POST /mcp (tools/list) -------->|
+  |<-- {tools: [...6 tools]}            |
+  |                                     |
+  |--- POST /mcp (tools/call) -------->|
+  |<-- {content: [{text: "..."}]}       |
 ```
 
-The `POST /mcp` handler routes four methods:
+StreamableHTTP is the successor to the older SSE transport. In the SSE model, clients first established a long-lived `GET /sse` connection to discover the message endpoint. StreamableHTTP eliminates that -- clients POST directly to `/mcp`. The server can still use SSE for streaming responses (which is why `WriteTimeout` is omitted on the HTTP server), but the initial handshake is simpler.
 
-- **`initialize`** -- returns protocol version `"2024-11-05"`, server info, and capabilities (tools only, no `listChanged`).
-- **`notifications/initialized`** -- acknowledgment, returns empty.
-- **`tools/list`** -- returns all 8 tool definitions with full JSON Schemas.
-- **`tools/call`** -- the actual work. Unpacks `{name, arguments}`, creates a 30-second context timeout, dispatches.
+---
 
 ## Authentication -- The Most Interesting Part
 
-This is where KubeLens deviates most sharply from standard client-go usage, and understanding *why* requires understanding how GKE authentication actually works.
+This is where KubeLens departs from every Kubernetes tool you have used before. Instead of reading kubeconfig or accepting raw tokens, it implements a full OAuth 2.0 authorization server that proxies Google authentication.
 
-### How GKE Auth Works End-to-End
+### The Mental Model: Two Different OAuth Client IDs
 
-When you run `kubectl get pods` against a GKE cluster, here is what happens under the hood:
+There are two completely separate `client_id` values in this system, and confusing them is the fastest way to misunderstand the architecture:
 
-1. kubectl reads `~/.kube/config` and finds an `exec`-based auth provider.
-2. It shells out to `gke-gcloud-auth-plugin --mode=exec`.
-3. The plugin returns a JSON `ExecCredential` containing a short-lived Google OAuth2 access token (typically 60-minute TTL).
-4. kubectl sends this token as `Authorization: Bearer <token>` to the GKE API server.
+```
+Claude Code ──(MCP client_id)──> KubeLens Server ──(Google client_id)──> Google
+```
 
-The standard client-go approach mirrors this: `clientcmd.BuildConfigFromFlags()` reads kubeconfig, discovers the exec plugin, and handles token refresh automatically through client-go's auth provider framework.
+- **MCP `client_id`** -- identifies the application (Claude Code, Cursor, etc.). Obtained via Dynamic Client Registration (`POST /register`). Used at `/authorize` and `/token`. Each installation registers independently.
+- **Google `client_id`** -- `GOOGLE_CLIENT_ID` env var. Identifies our server to Google. Used internally when redirecting to Google login. Claude Code never sees this.
 
-### Why KubeLens Bypasses All of This
+A `client_id` identifies the APPLICATION, not the user. Multiple users share the same `client_id`. User identity comes from the Google login that produces a session.
 
-KubeLens takes a fundamentally different approach. Instead of reading kubeconfig, it accepts raw `api_server` and `token` parameters on every single tool call:
+### The Full Auth Flow
 
-```go
-cfg := &rest.Config{
-    Host:        apiServer,
-    BearerToken: token,
+```
+0. Discovery + Registration (one-time per client installation)
+
+   Claude Code ─── GET /.well-known/oauth-authorization-server ──> KubeLens
+                <── { authorization_endpoint, token_endpoint,
+                      registration_endpoint, ... }
+
+   Claude Code ─── POST /register ──────────────────────────────> KubeLens
+                   { client_name: "Claude Code",
+                     redirect_uris: ["http://127.0.0.1:0/callback"],
+                     token_endpoint_auth_method: "none" }
+                <── { client_id: "abc123...", client_id_issued_at: ... }
+
+1. Authorization (user-facing, in browser)
+
+   Claude Code opens browser ──> GET /authorize?client_id=abc123
+                                    &redirect_uri=http://127.0.0.1:54321/callback
+                                    &code_challenge=<SHA256(verifier)>
+                                    &code_challenge_method=S256
+                                    &state=<csrf_token>
+
+   KubeLens validates:
+     - client_id exists in registry
+     - redirect_uri matches registered URIs (port-agnostic per RFC 8252 s7.3)
+     - code_challenge_method is S256
+   Stores PendingAuth { client_id, code_challenge, redirect_uri, state }
+   Redirects browser ──> Google login (with pendingKey as Google's state param)
+
+2. Google callback (server-to-server)
+
+   Google redirects browser ──> GET /callback?code=<google_auth_code>&state=<pendingKey>
+
+   KubeLens:
+     - Looks up PendingAuth by pendingKey (one-time use, 5 min TTL)
+     - Exchanges google_auth_code for Google access + refresh tokens (server-to-server)
+     - Creates Session { email, access_token, refresh_token, expires_at } (24h TTL)
+     - Generates internal auth code linked to client_id + session
+     - Redirects browser ──> Claude Code's loopback listener with auth code + state
+
+3. Token exchange (server-to-server)
+
+   Claude Code ─── POST /token ─────────────────────────────────> KubeLens
+                   { grant_type: "authorization_code",
+                     client_id: "abc123",
+                     code: "<internal_auth_code>",
+                     code_verifier: "<original_random_string>" }
+
+   KubeLens validates:
+     - client_id matches the one from /authorize step
+     - client_secret if confidential client
+     - PKCE: SHA256(code_verifier) == stored code_challenge
+   Returns: { access_token: "<session_id>", token_type: "bearer", expires_in: 86400 }
+
+4. Every subsequent MCP request
+
+   Claude Code ─── POST /mcp ───────────────────────────────────> KubeLens
+                   Authorization: Bearer <session_id>
+                   { "jsonrpc": "2.0", "method": "tools/call",
+                     "params": { "name": "list_pods", "arguments": {...} } }
+
+   Middleware:
+     - Extracts session_id from Bearer token
+     - Looks up Session (checks 24h TTL)
+     - Refreshes Google access token if near expiry (singleflight-deduplicated)
+     - Injects Session into request context
+   Tool handler:
+     - Gets Session from context
+     - Uses Session.AccessToken to call GKE/K8s APIs as the user
+```
+
+### Why OAuth Proxy Instead of Raw Tokens?
+
+The original KubeLens design accepted `api_server` and `token` as parameters on every tool call. This was stateless and simple, but it had problems:
+
+1. **Token exposure.** The raw Google access token traveled through the LLM's context window. If the conversation was logged, the token was logged.
+2. **No refresh.** GKE tokens expire after ~1 hour. The user had to manually run `gcloud auth print-access-token` and paste a new one.
+3. **No multi-user.** Any client could impersonate any user by providing their token.
+
+The OAuth proxy model solves all three. The user's Google tokens live server-side only. The client gets an opaque session ID (64-char hex, not a JWT, not reversible). Token refresh happens automatically via singleflight-deduplicated calls to Google's refresh endpoint.
+
+### Dynamic Client Registration (RFC 7591)
+
+MCP clients do not come pre-registered. When Claude Code first connects, it discovers the `registration_endpoint` from the metadata document and calls `POST /register`:
+
+```json
+{
+  "client_name": "Claude Code",
+  "redirect_uris": ["http://127.0.0.1:0/callback"],
+  "grant_types": ["authorization_code"],
+  "token_endpoint_auth_method": "none"
 }
 ```
 
-This is a "bare" rest.Config -- no token rotation, no exec plugins, no auth provider plugins. The token is baked in as a static string, and client-go's transport layer sends it as `Authorization: Bearer <token>` on every HTTP request.
+The server enforces a security policy: **all redirect URIs must be loopback** (`127.0.0.1`, `::1`, or `localhost`). This prevents open redirect attacks where an attacker registers `https://evil.com` as a redirect URI.
 
-The reasons are deliberate:
+Two client types are supported:
 
-1. **Statelessness.** The server holds no user sessions. Each request is self-contained.
-2. **Multi-cluster.** Each tool call can target a different cluster. Call `list_pods` on cluster A, then `get_events` on cluster B, in consecutive requests.
-3. **Decoupled auth.** The caller (Claude, or whatever MCP client) is responsible for obtaining the token. For GKE, that means running `gcloud auth print-access-token` separately.
+| Type | `token_endpoint_auth_method` | Secret? | Use Case |
+|------|------------------------------|---------|----------|
+| Public | `"none"` (default) | No | CLI tools (Claude Code, Cursor) -- cannot safely store secrets |
+| Confidential | `"client_secret_post"` | Yes, server-generated | Server-side apps |
 
-The tradeoff is real: tokens expire after roughly an hour for GKE. The caller must handle refresh. But for an interactive LLM session, this is perfectly fine -- the human or orchestrator can refresh the token when calls start failing with 401s.
+The `client_id` is reused across logins. Claude Code registers once per installation, then uses the same `client_id` for all subsequent authentications. If the server restarts (in-memory store), clients re-register.
 
-### TLS Configuration
+### Loopback Redirect URI Matching (RFC 8252 Section 7.3)
 
-GKE API servers use Google-signed TLS certificates, so the default system CA bundle works. But for private clusters or custom CAs:
+Claude Code opens a temporary HTTP listener on a random port to receive the auth callback. This means the redirect URI changes every login: `http://127.0.0.1:54321/callback`, then `http://127.0.0.1:62018/callback`, etc.
 
-- **`ca_cert`**: accepts a base64-encoded PEM certificate, decoded at client creation time and passed as `rest.TLSClientConfig{CAData: decoded}`.
-- **`insecure: true`**: skips TLS verification entirely via `rest.TLSClientConfig{Insecure: true}`. The code uses an `else if` -- if you provide a CA cert, it takes precedence over insecure mode.
-
-## The Kubernetes Client -- Dual Clients and Caching
-
-### Typed vs. Dynamic
-
-KubeLens builds two clients from the same `rest.Config`:
-
-- **`kubernetes.Interface`** (typed client) -- for core resources with generated Go types: Pods, Namespaces, Events, Deployments, Nodes. Type-safe, with compile-time guarantees.
-- **`dynamic.Interface`** (dynamic client) -- for CRDs. Can query any GroupVersionResource without generated types, returning `unstructured.Unstructured` objects. This is what powers `list_crds` (which queries the `apiextensions.k8s.io/v1/customresourcedefinitions` GVR) and `get_crd_instances`.
-
-### Client Caching with TTL
-
-Creating a `kubernetes.Clientset` is expensive -- it involves HTTP/2 transport setup and TLS handshake configuration. Doing this on every request would be wasteful. So KubeLens caches clients:
+Per RFC 8252 Section 7.3, loopback redirect URIs are matched by **scheme + host + path only**, ignoring port. The `matchesRegisteredURI` helper implements this:
 
 ```go
-var (
-    clientCache   = make(map[string]*cacheEntry)
-    clientCacheMu sync.Mutex
-    cacheTTL      = 5 * time.Minute
-)
-
-func GetOrCreateClient(apiServer, token, caCert string, insecure bool) (*Client, error) {
-    h := sha256.Sum256([]byte(token))
-    key := apiServer + "|" + fmt.Sprintf("%x", h[:8])
+// Compares scheme + host + path. Ignores port for loopback URIs.
+func matchesRegisteredURI(requestURI string, registeredURIs []string) bool {
     // ...
 }
 ```
 
-The cache key is `apiServer + "|" + sha256(token)[:8]` -- the first 8 hex characters of the token's SHA-256 hash. This means:
+### PKCE (RFC 7636) -- Why It Matters for CLI Auth
 
-- Same server + same token = cache hit (fast path).
-- Same server + new token (after refresh) = new client (correct behavior).
-- Different server = different client (multi-cluster support).
+PKCE (Proof Key for Code Exchange) prevents authorization code interception. The flow:
 
-The 5-minute TTL is a middle ground. GKE tokens last about an hour, so most requests within a session will hit the cache. But the TTL ensures that stale clients eventually get cleaned up.
+1. Claude Code generates a random `code_verifier` (high-entropy string)
+2. Computes `code_challenge = BASE64URL(SHA256(code_verifier))`
+3. Sends `code_challenge` to `/authorize`
+4. Server stores the challenge
+5. At `/token`, Claude Code sends the original `code_verifier`
+6. Server computes `SHA256(verifier)` and compares to stored challenge
 
-The cache is protected by a `sync.Mutex`, not a `sync.RWMutex`. This is fine -- the critical section is tiny (a map lookup and a time comparison), and the write path (creating a new client) is infrequent.
+Only the client that generated the verifier can complete the exchange. An attacker who intercepts the auth code cannot use it without the verifier. The server enforces `S256` -- plain challenges (no hash) are rejected.
 
-## Networking Decisions
+### Session Management -- The In-Memory Store
 
-The HTTP server uses deliberately asymmetric timeouts:
+All auth state lives in Go maps protected by per-map `sync.RWMutex`:
 
 ```go
-httpServer: &http.Server{
-    ReadTimeout:  10 * time.Second,
-    WriteTimeout: 60 * time.Second,
+type Store struct {
+    sessions map[string]*Session     // session ID -> Google tokens       (24h TTL)
+    pending  map[string]*PendingAuth // pending key -> in-flight OAuth    (5 min TTL)
+    codes    map[string]*AuthCode    // auth code -> session ID mapping   (5 min TTL)
+    clients  map[string]*Client      // client_id -> registered client    (no TTL)
 }
 ```
 
-`ReadTimeout` is 10 seconds because JSON-RPC request bodies are small. `WriteTimeout` is 60 seconds because some Kubernetes API calls take significant time -- listing 1000+ nodes, for instance, involves the API server serializing a large response.
+Design decisions:
+- **Separate mutexes per map** -- looking up a session does not block creating an auth code or registering a client.
+- **TTL enforcement** -- checked on read (lazy) + background goroutine sweeps expired entries every 10 minutes (eager).
+- **One-time use** -- `PendingAuth` and `AuthCode` are deleted on read. Replay is impossible.
+- **`ClientID` flows through the chain** -- stored in `PendingAuth`, copied to `AuthCode`, validated at `/token`. Ensures the client that started the flow finishes it.
+- **Session IDs are opaque** -- 64-char hex from `crypto/rand`. Not a JWT, not derived from tokens, cannot be reversed.
 
-The router is `http.NewServeMux` from the standard library. No Gorilla, no Chi, no gin. For two endpoints, the standard mux is the right choice.
+### Token Refresh with Singleflight
 
-On the Kubernetes side, client-go's transport uses HTTP/2 by default when talking to the API server. Every tool call results in one or more HTTP requests. An important detail: list operations use `metav1.ListOptions{}` with no pagination -- the full result set comes back in one response. This is fine for debugging-oriented reads but would not scale for production scraping of very large clusters.
-
-One smart optimization: the `get_events` tool uses server-side filtering via `FieldSelector: "type=Warning"`. Instead of fetching all events and filtering client-side, this pushes the filter to the API server, which is far more efficient.
-
-## Tool Design -- Structured Summaries, Not Raw Objects
-
-The tools do not return raw Kubernetes API objects. Instead, each tool extracts a focused summary. For pods:
+When a Google access token approaches expiry (within 5 minutes), the middleware refreshes it:
 
 ```go
-type podSummary struct {
-    Name     string `json:"name"`
-    Phase    string `json:"phase"`
-    Ready    bool   `json:"ready"`
-    Restarts int32  `json:"restarts"`
-    Node     string `json:"node"`
-    Message  string `json:"message,omitempty"`
+func (g *GoogleOAuth) EnsureFreshToken(sessionID string, session *Session) error {
+    if time.Now().Before(session.ExpiresAt.Add(-5 * time.Minute)) {
+        return nil // still valid
+    }
+
+    _, err, _ := g.refreshGroup.Do(sessionID, func() (interface{}, error) {
+        // Re-check inside singleflight -- another goroutine may have refreshed already
+        if time.Now().Before(session.ExpiresAt.Add(-5 * time.Minute)) {
+            return nil, nil
+        }
+        // ... call Google's token refresh endpoint ...
+    })
+    return err
 }
 ```
 
-This is a critical design choice. A raw Pod object in Kubernetes is enormous -- dozens of fields, nested specs, status conditions, volume mounts, tolerations. Sending all of that to an LLM wastes context window and makes it harder for the model to find what matters. The summary extracts the signal: is the pod running? Is it ready? How many restarts? What node?
+`singleflight.Group` keyed by session ID ensures that when 5 concurrent MCP requests arrive for the same user whose token is expiring, only ONE goroutine calls Google. The other 4 wait and get the same result. Once the call completes, the key is forgotten -- future calls execute fresh.
 
-The same pattern applies to deployments (desired/ready/available counts), nodes (condition map), and events (reason/message/object/count).
+---
 
-Every tool shares common auth properties via `mergeProps()`, which combines the four auth fields (`api_server`, `token`, `ca_cert`, `insecure`) with any tool-specific parameters. This keeps the schema DRY and ensures consistent auth handling.
+## The Kubernetes Client Layer
 
-## The 8 Tools
+### How Cluster Selection Works
 
-| Tool | Client | Key Detail |
-|------|--------|------------|
-| `list_namespaces` | typed | Cluster-scoped, no namespace param |
-| `list_pods` | typed | Returns podSummary with restart aggregation |
-| `get_pod_logs` | typed | TailLines-based, default 100 lines |
-| `get_events` | typed | Server-side `type=Warning` filter |
-| `list_deployments` | typed | Desired vs ready vs available |
-| `list_nodes` | typed | Full condition map per node |
-| `list_crds` | dynamic | Queries apiextensions.k8s.io GVR |
-| `get_crd_instances` | dynamic | Arbitrary GVR, cluster-wide |
+There is no pre-configured cluster. Every tool call includes `project`, `location`, and `cluster` as parameters. The server calls the GKE API to get the cluster's endpoint + CA certificate, builds a `kubernetes.Clientset` using the user's Google token, and makes the K8s API call.
 
-## MCP Client Configuration
+```go
+func NewClientForUser(ctx context.Context, accessToken string, cluster ClusterInfo) (*kubernetes.Clientset, error) {
+    endpoint, ca, err := getCachedClusterDetails(ctx, accessToken, cluster)
 
-For Claude Code, the configuration is a single JSON file:
+    config := &rest.Config{
+        Host:        "https://" + endpoint,
+        BearerToken: accessToken,       // user's Google OAuth token
+        TLSClientConfig: rest.TLSClientConfig{
+            CAData: ca,                 // cluster's CA cert
+        },
+    }
+    return kubernetes.NewForConfig(config)
+}
+```
+
+This is a "bare" `rest.Config` -- no token rotation, no exec plugins, no auth provider plugins. The token is baked in as a static string. This works because token refresh happens at the OAuth middleware layer, not at the K8s client layer.
+
+### Cluster Details Caching (10-Minute TTL)
+
+The expensive operation is calling the GKE API to resolve a cluster name into an endpoint IP and CA certificate. This is cached for 10 minutes, keyed by `project/location/cluster`:
+
+```go
+var (
+    clusterCacheMu  sync.RWMutex
+    clusterCache    = make(map[string]*cachedCluster)
+    clusterCacheTTL = 10 * time.Minute
+)
+```
+
+The cache uses a read lock for lookup and a write lock for update -- multiple goroutines can check the cache simultaneously, but only one can write. This maximizes throughput on cache hits.
+
+### K8s Client Connection Pooling (The Non-Obvious Part)
+
+`kubernetes.NewForConfig` is called per-request, but this is cheap -- it just creates wrapper structs. The actual HTTP/2 connections and TLS state are pooled by client-go's internal `tlsTransportCache` (`k8s.io/client-go/transport/cache.go`).
+
+The critical insight: **`BearerToken` is NOT part of the transport cache key.** Different tokens targeting the same cluster (same CA cert, same server name) share the same connection pool and TLS state. This means a multi-user server does not open a new TLS connection per user.
+
+```
+Transport cache key = (CA cert, client cert, server name, ...)
+                      NOT (bearer token)
+
+User A's token ─┐
+                ├──> same http.Transport, same TCP connections
+User B's token ─┘
+```
+
+---
+
+## The 6 Tools
+
+| Tool | Scope | Key Detail |
+|------|-------|------------|
+| `list_clusters` | GKE API (not K8s) | Lists all clusters in a GCP project. Uses `container.Service` directly, not `kubernetes.Clientset` |
+| `list_pods` | Namespace or cluster-wide | Returns formatted table: name, status, reason, restarts, age. **500 pod limit** with truncation indicator |
+| `describe_pod` | Single pod | Detailed view: conditions, container statuses (waiting/running/terminated), resource requests/limits |
+| `get_pod_logs` | Single pod/container | Tail-based (default 100 lines). **60s timeout** (vs 30s for others). **1 MB cap** via `io.LimitReader` |
+| `get_events` | Namespace or cluster-wide | **200 event limit**, sorted by `LastTimestamp` (most recent first), displays top 50. Uses `sort.Slice` |
+| `get_nodes` | Cluster-wide | Status, kubelet version, CPU/memory capacity, topology zone. **500 node limit** |
+
+### Tool Design Philosophy
+
+Tools return structured text summaries, not raw Kubernetes API objects. A raw Pod object is enormous -- dozens of fields, nested specs, status conditions, volume mounts, tolerations. Sending all of that to an LLM wastes context window and makes it harder for the model to find what matters.
+
+Each handler shares the same pattern:
+
+```go
+func handleListPods(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+    ctx, cancel := context.WithTimeout(ctx, 30*time.Second)  // deadline
+    defer cancel()
+
+    session, err := auth.SessionFromContext(ctx)              // get user's Google token
+    if err != nil { return errResult("auth: %v", err) }
+
+    ci, err := clusterInfo(req.GetArguments())                // validate + extract cluster params
+    if err != nil { return errResult("validation: %v", err) }
+
+    client, err := k8sClient.NewClientForUser(ctx, session.AccessToken, ci)  // cached cluster details
+    if err != nil { return errResult("auth/connect: %v", err) }
+
+    // ... K8s API call with pagination limits ...
+    // ... format as text table ...
+    return mcp.NewToolResultText(sb.String()), nil
+}
+```
+
+### Input Validation
+
+All GCP identifiers are validated with compiled regexes before reaching any API:
+
+```go
+var (
+    projectRe  = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+    locationRe = regexp.MustCompile(`^[a-z]+-[a-z]+\d+(-[a-z])?$`)
+    nameRe     = regexp.MustCompile(`^[a-z][a-z0-9-]{0,38}[a-z0-9]$`)
+)
+```
+
+These are compiled once at startup (`MustCompile` panics on invalid regex -- caught at startup, not runtime). They prevent injection-style attacks and catch typos before they result in confusing GKE API errors.
+
+---
+
+## HTTP Server Configuration
+
+```go
+srv := &http.Server{
+    Addr:              ":8080",
+    Handler:           recoverMiddleware(corsMiddleware(mux)),
+    ReadHeaderTimeout: 10 * time.Second,  // slowloris protection
+    IdleTimeout:       120 * time.Second, // keep-alive cleanup
+    // WriteTimeout intentionally omitted — MCP uses SSE streams
+}
+```
+
+### Why WriteTimeout Is Omitted
+
+MCP's StreamableHTTP transport uses SSE (Server-Sent Events) for streaming responses. SSE connections stay open indefinitely. A `WriteTimeout` would kill these connections after the deadline, breaking streaming tool responses. The tradeoff: a misbehaving client could hold a connection open forever, but the `IdleTimeout` (120s) handles idle connections.
+
+### Middleware Nesting Order
+
+The `Handler` field defines execution order through nesting:
+
+```
+recoverMiddleware (outermost -- catches panics from everything below)
+  └── corsMiddleware (rejects OPTIONS, sets nosniff)
+        └── mux (routes by URL path)
+              └── route-specific handler
+                    └── oauth.Middleware (for /mcp only -- validates Bearer token)
+                          └── StreamableHTTPServer (parses JSON-RPC)
+                                └── MCPServer (dispatches to tool handler)
+```
+
+### Graceful Shutdown
+
+```
+SIGTERM/SIGINT
+  |
+  v
+signal.Notify catches it
+  |
+  v
+srv.Shutdown(15s context)
+  |-- stops accepting new connections
+  |-- waits for in-flight requests (including SSE streams) to complete
+  |-- exits cleanly after all done or 15s deadline
+  |
+  v
+stopCleanup()       // kills session cleanup goroutine
+stopRateLimiter()   // kills rate limiter cleanup goroutine
+```
+
+`ListenAndServe` runs in a goroutine; the main thread blocks on the signal channel. When `Shutdown` is called, `ListenAndServe` returns `http.ErrServerClosed` -- this is expected, not an error.
+
+---
+
+## Security Hardening
+
+The server implements 10 security fixes and 13 bug fixes. The important ones:
+
+### Redirect URI Validation
+Only loopback URIs allowed (`127.0.0.1`, `::1`, `localhost`). Prevents open redirect attacks.
+
+### Rate Limiting (Token Bucket)
+10 requests/minute per IP across all auth endpoints (`/authorize`, `/callback`, `/token`, `/register`). Token bucket algorithm: burst of 5, refill 1 every 6 seconds. Per-IP limiters with background cleanup of stale entries.
+
+```go
+limiter := rate.NewLimiter(rate.Every(6*time.Second), 5)
+```
+
+### CORS Rejection
+OPTIONS preflight requests are rejected with 403. The server is not designed to be called from browser JavaScript. `X-Content-Type-Options: nosniff` prevents MIME sniffing.
+
+### Panic Recovery
+`recoverMiddleware` catches panics in any handler and returns a 500 instead of crashing the entire process. This is critical for a long-running server.
+
+### fetchEmail Security
+Uses `Authorization: Bearer` header instead of query parameter to avoid leaking tokens in access logs.
+
+### Scheme Detection Behind Proxy
+When behind a TLS-terminating load balancer, `r.TLS` is always nil. The server checks `X-Forwarded-Proto` header, but only when `TRUST_PROXY=true` -- prevents an attacker from spoofing the header.
+
+---
+
+## Deployment
+
+### Dockerfile (Multi-Stage Build)
+
+```dockerfile
+FROM golang:1.23-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /kubelens ./cmd/server
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /kubelens /kubelens
+EXPOSE 8080
+ENTRYPOINT ["/kubelens"]
+```
+
+Key decisions:
+- **`CGO_ENABLED=0`** -- static binary, no glibc dependency. Required for distroless.
+- **`distroless/static-debian12:nonroot`** -- no shell, no package manager, runs as non-root. Minimal attack surface.
+- **Separate `go mod download`** layer -- Docker caches dependencies, rebuilds only when go.mod/go.sum change.
+
+### Environment Variables
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID (from GCP Console) |
+| `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth client secret |
+| `REDIRECT_URL` | Yes | Server's `/callback` URL (registered in Google Console) |
+| `PORT` | No (default: 8080) | Listen port |
+| `TRUST_PROXY` | No (default: false) | Trust `X-Forwarded-Proto` header |
+
+### MCP Client Configuration (Claude Code)
 
 ```json
 {
   "mcpServers": {
     "kubelens": {
-      "type": "sse",
-      "url": "http://localhost:8080/sse"
+      "type": "streamable-http",
+      "url": "https://kubelens.example.com/mcp"
     }
   }
 }
 ```
 
-Claude connects to the SSE endpoint, receives the `/mcp` endpoint path, then sends all JSON-RPC requests via POST. The LLM sees the 8 tools with their JSON Schemas and can invoke them with the right parameters -- including obtaining a bearer token via `gcloud auth print-access-token`.
+Claude Code discovers the OAuth endpoints via `/.well-known/oauth-authorization-server`, registers via `POST /register`, and handles the OAuth flow automatically. The user sees a browser popup for Google login.
 
-## Testing at Scale
+---
 
-All 8 tools were tested successfully against a live GKE cluster with:
+## Dependencies
 
-- **1,018 nodes** -- `list_nodes` returned all of them within the 30-second tool timeout.
-- **245 CRDs** -- `list_crds` via the dynamic client handled the full apiextensions list.
-- **537 Istio VirtualServices** -- `get_crd_instances` with `group: networking.istio.io`, `version: v1beta1`, `resource: virtualservices` returned all instances.
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `mcp-go` | v0.47.0 | MCP protocol library (JSON-RPC + StreamableHTTP transport) |
+| `golang.org/x/oauth2` | v0.16.0 | Google OAuth 2.0 flow + token refresh |
+| `google.golang.org/api/container/v1` | v0.126.0 | GKE API for cluster discovery and details |
+| `k8s.io/client-go` | v0.29.3 | Kubernetes client with TLS transport caching |
+| `golang.org/x/time/rate` | v0.5.0 | Token bucket rate limiting |
+| `golang.org/x/sync/singleflight` | v0.20.0 | Deduplicate concurrent token refreshes |
 
-Authentication via `gcloud auth print-access-token` worked seamlessly. The token was passed as the `token` parameter on each tool call, and the client cache ensured that repeated calls within the same session reused the same clientset.
+---
 
-## Key Takeaways
+## Key File Map
 
-1. **MCP SSE transport is simpler than it sounds.** The SSE connection is just a signaling channel; actual RPC is plain POST. You can implement it with the Go standard library in about 20 lines.
+| File | Purpose |
+|------|---------|
+| `cmd/server/main.go` | Entry point: wires mux + middleware + MCP server, graceful shutdown, HTTP timeouts |
+| `internal/auth/oauth.go` | OAuth endpoints, Dynamic Client Registration, Google token exchange, PKCE, singleflight refresh, scheme detection |
+| `internal/auth/middleware.go` | Bearer token validation, session injection into context |
+| `internal/auth/session.go` | In-memory store with TTLs (24h sessions, 5 min codes/pending), client registry, cleanup goroutine |
+| `internal/auth/ratelimit.go` | Per-IP rate limiter (10 req/min) for auth + registration endpoints |
+| `internal/tools/tools.go` | MCP tool definitions + handlers with input validation, context timeouts, pagination limits |
+| `internal/k8s/client.go` | GKE API calls with cluster details cache (10 min TTL), builds `kubernetes.Clientset` per user |
 
-2. **Bypassing kubeconfig for stateless multi-cluster access is a legitimate pattern.** The standard client-go flow (kubeconfig + exec plugins + token refresh) is designed for long-lived CLI tools. For a stateless server where each request might target a different cluster, constructing a bare `rest.Config` with `Host` + `BearerToken` is cleaner.
+---
 
-3. **Client caching by token hash solves the refresh problem elegantly.** When the token rotates, the cache key changes, and a new client is created automatically. No explicit invalidation logic needed.
+## What Changed From v1
 
-4. **Returning summaries instead of raw API objects is critical for LLM tool design.** The model's context window is finite and its attention is not unlimited. Give it the signal, not the noise.
+| Aspect | v1 (Original) | v2 (Current) |
+|--------|---------------|--------------|
+| Transport | SSE (`GET /sse` + `POST /mcp`) | StreamableHTTP (`POST /mcp` directly) |
+| Auth | Raw `api_server` + `token` per request | OAuth 2.0 proxy with sessions |
+| Client registration | None | Dynamic Client Registration (RFC 7591) |
+| PKCE | None | S256 required |
+| Token management | Caller's problem (manual `gcloud auth print-access-token`) | Server-side refresh with singleflight |
+| Token exposure | Token in LLM context window | Token server-side only; client gets opaque session ID |
+| Tools | 8 (including CRD tools) | 6 (cluster-focused, no CRD tools) |
+| K8s clients | Typed + Dynamic | Typed only |
+| Client caching | By `sha256(token)[:8]` with 5 min TTL | Cluster details cache (endpoint + CA) with 10 min TTL |
+| Rate limiting | None | Token bucket, 10 req/min per IP |
+| Graceful shutdown | None | SIGTERM/SIGINT with 15s drain |
+| Pagination | None | 500 pods, 200 events, 500 nodes |
+| Log safety | No limit | 1 MB cap via `io.LimitReader` |
+| Panic recovery | None | `recoverMiddleware` |
 
-5. **The dynamic client unlocks CRD access without code generation.** You do not need to run `client-gen` for every CRD in your cluster. `dynamic.Interface` with a `schema.GroupVersionResource` handles arbitrary resources at runtime.
+---
+
+## Interview Prep
+
+### Q: Why implement an OAuth 2.0 authorization server instead of just accepting raw tokens?
+
+**A:** Three reasons. First, token exposure -- with raw tokens, the Google access token passes through the LLM's context window and could end up in conversation logs. The OAuth proxy keeps Google tokens server-side; the client only sees an opaque session ID. Second, token refresh -- GKE tokens expire in ~1 hour. With raw tokens, the user has to manually run `gcloud auth print-access-token` when calls start failing. The OAuth proxy refreshes automatically using the stored refresh token, with singleflight to deduplicate concurrent refreshes. Third, multi-user support -- the OAuth model gives each user their own session with proper identity (email from Google's userinfo endpoint), while raw tokens provide no user attribution.
+
+### Q: Explain the two different client_ids in this system.
+
+**A:** There are two completely separate client_id values. The MCP client_id identifies the application -- Claude Code, Cursor, etc. It is obtained via Dynamic Client Registration (`POST /register`) and used at `/authorize` and `/token`. Each installation registers independently and gets its own client_id. The Google client_id (`GOOGLE_CLIENT_ID` env var) identifies the KubeLens server to Google. It is used internally when redirecting to Google's login page. Claude Code never sees the Google client_id. A key concept: client_id identifies the APPLICATION, not the user. Multiple users share the same client_id. User identity comes from the Google login.
+
+### Q: How does singleflight work for token refresh, and why is the double-check inside the callback important?
+
+**A:** `singleflight.Group.Do` takes a key (session ID) and a function. If multiple goroutines call `Do` with the same key concurrently, only one executes the function -- the others block and receive the same result. This prevents thundering herd on Google's token refresh endpoint when multiple MCP requests arrive simultaneously for the same user whose token is near expiry.
+
+The double-check inside the callback (re-checking `ExpiresAt` before calling Google) handles a subtle race: goroutine A enters `Do`, goroutine B calls `Do` with the same key and blocks. But goroutine C, which arrived just before A, already completed a refresh in a previous singleflight cycle. A's callback re-checks and sees the token is now fresh, so it returns without calling Google. Without the double-check, A would make a redundant refresh call.
+
+Important: singleflight only deduplicates in-flight calls. Once `Do` returns, the key is forgotten. Future calls execute fresh -- there is no caching.
+
+### Q: Why is WriteTimeout omitted on the HTTP server?
+
+**A:** MCP uses SSE (Server-Sent Events) for streaming responses. SSE connections are long-lived -- the server keeps the response open and sends events as they become available. A `WriteTimeout` would kill these connections after the deadline. Since some streaming responses can take an indefinite amount of time, any fixed timeout would be wrong. Protection against truly idle connections comes from `IdleTimeout: 120s`, which closes keep-alive connections that have no active request.
+
+### Q: How does K8s client-go's transport cache interact with a multi-user server?
+
+**A:** `kubernetes.NewForConfig` is cheap -- it just creates wrapper structs. The expensive work (TLS handshake, HTTP/2 connection setup) is done by `http.Transport`, which is cached by client-go's internal `tlsTransportCache`. The critical detail: **BearerToken is NOT part of the cache key.** The cache key consists of TLS configuration (CA cert, client cert, server name). This means all users targeting the same cluster share the same transport and TCP connections, with only the `Authorization` header differing per request. This is why creating a new `Clientset` per request is not wasteful -- the heavy lifting is shared.
+
+### Q: Walk through what happens when a user's session expires mid-conversation.
+
+**A:** Sessions have a 24-hour TTL (checked at `GetSession` on every request). When a request arrives with an expired session ID, the middleware returns HTTP 401 before the MCP handler ever sees the request. Claude Code receives the 401 and triggers a re-authentication flow: it already has the client_id from the initial registration, so it skips registration, opens the browser for Google login, receives a new auth code, exchanges it for a new session ID via `/token`, and resumes sending MCP requests with the new Bearer token. The Google refresh token from the expired session is lost (it was in-memory only), so the user must log in to Google again.
+
+### Q: Explain the port-agnostic loopback redirect URI matching and why it is necessary.
+
+**A:** Claude Code opens a temporary HTTP listener on a random port to receive the OAuth callback (`http://127.0.0.1:54321/callback`). The port changes every login because the OS assigns it. RFC 8252 Section 7.3 specifies that for native apps using loopback redirects, the redirect URI match must compare scheme + host + path only, ignoring port. The `matchesRegisteredURI` helper implements this. Without port-agnostic matching, the user would need to re-register a new redirect URI for every login attempt, which defeats the purpose of reusable client registration.
 
 ---
 
 ## Related Notes
 
+- [[notes/AuthNZ/oauth-oidc-and-workload-identity|OAuth, OIDC & Workload Identity Federation]]
 - [[notes/K8s/interactive-containers-piping-and-ttys|Interactive Containers, Piping, and TTYs in Kubernetes]]
 - [[notes/AI-Tooling/claude-code-internals|Claude Code Internals -- Skills, Agents, Hooks, and the Plugin System]]

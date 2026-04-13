@@ -1,8 +1,8 @@
 ---
-title: "Summary: KubeLens MCP Server"
+title: "Summary: k8scope MCP Server"
 ---
 
-> **Full notes:** [[notes/K8s/kubelens-mcp-server|KubeLens: Building a Kubernetes MCP Server with OAuth 2.0 and StreamableHTTP -->]]
+> **Full notes:** [[notes/K8s/k8scope-mcp-server|k8scope: Building a Kubernetes MCP Server with OAuth 2.0 and StreamableHTTP -->]]
 
 ## Key Concepts
 
@@ -66,7 +66,7 @@ Auth Flow:
   6. POST /mcp  Authorization: Bearer <session_id>    -> tool calls
 
 Two client_ids:
-  Claude Code --(MCP client_id)--> KubeLens --(Google client_id)--> Google
+  Claude Code --(MCP client_id)--> k8scope --(Google client_id)--> Google
 
 In-Memory Store:
   sessions:  session_id   -> Google tokens      (24h TTL)

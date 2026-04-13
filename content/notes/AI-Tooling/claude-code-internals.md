@@ -820,4 +820,4 @@ The key pattern is separation of concerns: read-only agents for analysis, write-
 
 ## Related Notes
 
-- [[notes/K8s/kubelens-mcp-server|KubeLens: Building a Kubernetes MCP Server with OAuth 2.0 and StreamableHTTP]]
+- [[notes/K8s/k8scope-mcp-server|k8scope: Building a Kubernetes MCP Server with OAuth 2.0 and StreamableHTTP]]

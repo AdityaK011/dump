@@ -689,4 +689,4 @@ Quick troubleshooting:
 
 ## Related Notes
 
-- [[notes/K8s/kubelens-mcp-server|KubeLens MCP Server]] -- practical implementation of OAuth 2.0 proxy with Dynamic Client Registration (RFC 7591), PKCE (RFC 7636), and server-side session management in Go
+- [[notes/K8s/k8scope-mcp-server|k8scope MCP Server]] -- practical implementation of OAuth 2.0 proxy with Dynamic Client Registration (RFC 7591), PKCE (RFC 7636), and server-side session management in Go

@@ -1,8 +1,8 @@
 ---
-title: "KubeLens: Building a Kubernetes MCP Server with OAuth 2.0 and StreamableHTTP"
+title: "k8scope: Building a Kubernetes MCP Server with OAuth 2.0 and StreamableHTTP"
 ---
 
-What happens when you give an LLM direct, read-only access to a Kubernetes cluster? Not through a shell that runs `kubectl` commands -- through a purpose-built server that speaks the Model Context Protocol (MCP) and hands back structured data. That is KubeLens: a Go server that bridges Claude Code (or any MCP-capable client) to GKE clusters, with OAuth 2.0 authentication that proxies the user's Google identity to the Kubernetes API.
+What happens when you give an LLM direct, read-only access to a Kubernetes cluster? Not through a shell that runs `kubectl` commands -- through a purpose-built server that speaks the Model Context Protocol (MCP) and hands back structured data. That is k8scope: a Go server that bridges Claude Code (or any MCP-capable client) to GKE clusters, with OAuth 2.0 authentication that proxies the user's Google identity to the Kubernetes API.
 
 This post is a complete architectural walkthrough of the rearchitected version. The original design used SSE transport and accepted raw tokens per-request. The current system uses StreamableHTTP transport, implements a full OAuth 2.0 authorization server with Dynamic Client Registration (RFC 7591), PKCE (RFC 7636), and server-side session management. Everything changed except the core idea: give LLMs structured, read-only Kubernetes access.
 
@@ -17,7 +17,7 @@ The obvious approach to giving an LLM Kubernetes access is to let it run `kubect
 3. **Auth coupling.** kubectl reads `~/.kube/config`, which ties you to a single machine's credential setup.
 4. **No schema.** The LLM has no formal description of what parameters each operation accepts.
 
-KubeLens solves all four: it returns structured text, it only exposes read operations, it takes auth via OAuth 2.0 (user logs in with Google, server proxies their identity), and it advertises a JSON Schema for every tool.
+k8scope solves all four: it returns structured text, it only exposes read operations, it takes auth via OAuth 2.0 (user logs in with Google, server proxies their identity), and it advertises a JSON Schema for every tool.
 
 ---
 
@@ -82,14 +82,14 @@ StreamableHTTP is the successor to the older SSE transport. In the SSE model, cl
 
 ## Authentication -- The Most Interesting Part
 
-This is where KubeLens departs from every Kubernetes tool you have used before. Instead of reading kubeconfig or accepting raw tokens, it implements a full OAuth 2.0 authorization server that proxies Google authentication.
+This is where k8scope departs from every Kubernetes tool you have used before. Instead of reading kubeconfig or accepting raw tokens, it implements a full OAuth 2.0 authorization server that proxies Google authentication.
 
 ### The Mental Model: Two Different OAuth Client IDs
 
 There are two completely separate `client_id` values in this system, and confusing them is the fastest way to misunderstand the architecture:
 
 ```
-Claude Code ──(MCP client_id)──> KubeLens Server ──(Google client_id)──> Google
+Claude Code ──(MCP client_id)──> k8scope Server ──(Google client_id)──> Google
 ```
 
 - **MCP `client_id`** -- identifies the application (Claude Code, Cursor, etc.). Obtained via Dynamic Client Registration (`POST /register`). Used at `/authorize` and `/token`. Each installation registers independently.
@@ -102,11 +102,11 @@ A `client_id` identifies the APPLICATION, not the user. Multiple users share the
 ```
 0. Discovery + Registration (one-time per client installation)
 
-   Claude Code ─── GET /.well-known/oauth-authorization-server ──> KubeLens
+   Claude Code ─── GET /.well-known/oauth-authorization-server ──> k8scope
                 <── { authorization_endpoint, token_endpoint,
                       registration_endpoint, ... }
 
-   Claude Code ─── POST /register ──────────────────────────────> KubeLens
+   Claude Code ─── POST /register ──────────────────────────────> k8scope
                    { client_name: "Claude Code",
                      redirect_uris: ["http://127.0.0.1:0/callback"],
                      token_endpoint_auth_method: "none" }
@@ -120,7 +120,7 @@ A `client_id` identifies the APPLICATION, not the user. Multiple users share the
                                     &code_challenge_method=S256
                                     &state=<csrf_token>
 
-   KubeLens validates:
+   k8scope validates:
      - client_id exists in registry
      - redirect_uri matches registered URIs (port-agnostic per RFC 8252 s7.3)
      - code_challenge_method is S256
@@ -131,7 +131,7 @@ A `client_id` identifies the APPLICATION, not the user. Multiple users share the
 
    Google redirects browser ──> GET /callback?code=<google_auth_code>&state=<pendingKey>
 
-   KubeLens:
+   k8scope:
      - Looks up PendingAuth by pendingKey (one-time use, 5 min TTL)
      - Exchanges google_auth_code for Google access + refresh tokens (server-to-server)
      - Creates Session { email, access_token, refresh_token, expires_at } (24h TTL)
@@ -140,13 +140,13 @@ A `client_id` identifies the APPLICATION, not the user. Multiple users share the
 
 3. Token exchange (server-to-server)
 
-   Claude Code ─── POST /token ─────────────────────────────────> KubeLens
+   Claude Code ─── POST /token ─────────────────────────────────> k8scope
                    { grant_type: "authorization_code",
                      client_id: "abc123",
                      code: "<internal_auth_code>",
                      code_verifier: "<original_random_string>" }
 
-   KubeLens validates:
+   k8scope validates:
      - client_id matches the one from /authorize step
      - client_secret if confidential client
      - PKCE: SHA256(code_verifier) == stored code_challenge
@@ -154,7 +154,7 @@ A `client_id` identifies the APPLICATION, not the user. Multiple users share the
 
 4. Every subsequent MCP request
 
-   Claude Code ─── POST /mcp ───────────────────────────────────> KubeLens
+   Claude Code ─── POST /mcp ───────────────────────────────────> k8scope
                    Authorization: Bearer <session_id>
                    { "jsonrpc": "2.0", "method": "tools/call",
                      "params": { "name": "list_pods", "arguments": {...} } }
@@ -171,7 +171,7 @@ A `client_id` identifies the APPLICATION, not the user. Multiple users share the
 
 ### Why OAuth Proxy Instead of Raw Tokens?
 
-The original KubeLens design accepted `api_server` and `token` as parameters on every tool call. This was stateless and simple, but it had problems:
+The original k8scope design accepted `api_server` and `token` as parameters on every tool call. This was stateless and simple, but it had problems:
 
 1. **Token exposure.** The raw Google access token traveled through the LLM's context window. If the conversation was logged, the token was logged.
 2. **No refresh.** GKE tokens expire after ~1 hour. The user had to manually run `gcloud auth print-access-token` and paste a new one.
@@ -472,12 +472,12 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /kubelens ./cmd/server
+RUN CGO_ENABLED=0 go build -o /k8scope ./cmd/server
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /kubelens /kubelens
+COPY --from=build /k8scope /k8scope
 EXPOSE 8080
-ENTRYPOINT ["/kubelens"]
+ENTRYPOINT ["/k8scope"]
 ```
 
 Key decisions:
@@ -500,9 +500,9 @@ Key decisions:
 ```json
 {
   "mcpServers": {
-    "kubelens": {
+    "k8scope": {
       "type": "streamable-http",
-      "url": "https://kubelens.example.com/mcp"
+      "url": "https://k8scope.example.com/mcp"
     }
   }
 }
@@ -568,7 +568,7 @@ Claude Code discovers the OAuth endpoints via `/.well-known/oauth-authorization-
 
 ### Q: Explain the two different client_ids in this system.
 
-**A:** There are two completely separate client_id values. The MCP client_id identifies the application -- Claude Code, Cursor, etc. It is obtained via Dynamic Client Registration (`POST /register`) and used at `/authorize` and `/token`. Each installation registers independently and gets its own client_id. The Google client_id (`GOOGLE_CLIENT_ID` env var) identifies the KubeLens server to Google. It is used internally when redirecting to Google's login page. Claude Code never sees the Google client_id. A key concept: client_id identifies the APPLICATION, not the user. Multiple users share the same client_id. User identity comes from the Google login.
+**A:** There are two completely separate client_id values. The MCP client_id identifies the application -- Claude Code, Cursor, etc. It is obtained via Dynamic Client Registration (`POST /register`) and used at `/authorize` and `/token`. Each installation registers independently and gets its own client_id. The Google client_id (`GOOGLE_CLIENT_ID` env var) identifies the k8scope server to Google. It is used internally when redirecting to Google's login page. Claude Code never sees the Google client_id. A key concept: client_id identifies the APPLICATION, not the user. Multiple users share the same client_id. User identity comes from the Google login.
 
 ### Q: How does singleflight work for token refresh, and why is the double-check inside the callback important?
 

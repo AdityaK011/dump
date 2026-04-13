@@ -95,4 +95,4 @@ The process has no idea whether it's talking to a real 1970s teletypewriter, a m
 
 ## Related Notes
 
-- [[notes/K8s/kubelens-mcp-server|KubeLens MCP Server]]
+- [[notes/K8s/k8scope-mcp-server|k8scope MCP Server]]

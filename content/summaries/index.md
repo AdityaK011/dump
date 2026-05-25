@@ -12,6 +12,7 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | [[summaries/K8s/kubernetes-services-dns-and-network-policies\|Services, DNS & Network Policies]] | [[notes/K8s/kubernetes-services-dns-and-network-policies\|Full notes -->]] |
 | [[summaries/K8s/ingress-vs-gateway-api\|Ingress vs Gateway API]] | [[notes/K8s/ingress-vs-gateway-api\|Full notes -->]] |
 | [[summaries/K8s/kubernetes-autoscaling\|Kubernetes Autoscaling]] | [[notes/K8s/kubernetes-autoscaling\|Full notes -->]] |
+| [[summaries/K8s/vpa-eviction-loops\|The VPA Eviction Loop]] | [[notes/K8s/vpa-eviction-loops\|Full notes -->]] |
 | [[summaries/K8s/istio-and-envoy-internals\|Istio & Envoy Internals]] | [[notes/K8s/istio-and-envoy-internals\|Full notes -->]] |
 | [[summaries/K8s/istio-traffic-management-and-security\|Istio Traffic Management & Security]] | [[notes/K8s/istio-traffic-management-and-security\|Full notes -->]] |
 | [[summaries/K8s/service-mesh-multi-cluster-and-advanced-patterns\|Service Mesh, Multi-Cluster & Advanced Patterns]] | [[notes/K8s/service-mesh-multi-cluster-and-advanced-patterns\|Full notes -->]] |

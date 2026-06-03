@@ -17,6 +17,7 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 ## Autoscaling & Scheduling
 - [[notes/K8s/kubernetes-autoscaling|Kubernetes Autoscaling]] — HPA, VPA, KEDA, and the minute-by-minute anatomy of a traffic surge
 - [[notes/K8s/vpa-eviction-loops|The VPA Eviction Loop]] — Why VPA right-sizing can evict a pod forever, how multiple VPAs on one Deployment jam admission (oldest wins, Off-mode skipped), and why single-replica long-running workers are the classic victims
+- [[notes/K8s/server-side-apply-replicas-collapse|SSA Deletes Your Replicas]] — How a CD migration to Server-Side Apply collapsed an HPA-managed fleet to 1 via the `before-first-apply` ownership migration, why the *second* apply breaks not the first, and why a PDB can't protect a replica count
 
 ## Operators & Extension APIs
 - [[notes/K8s/kubebuilder-controllers-and-webhooks|Kubebuilder Controllers, Webhooks & Extension APIs]] — Reconcile loops, CRD versioning, admission webhooks, extension API servers

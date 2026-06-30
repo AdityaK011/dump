@@ -51,3 +51,10 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | Summary | Full Note |
 |---------|-----------|
 | [[summaries/AI-Tooling/claude-code-internals\|Claude Code Internals]] | [[notes/AI-Tooling/claude-code-internals\|Full notes -->]] |
+
+## Linux
+
+| Summary | Full Note |
+|---------|-----------|
+| [[summaries/Linux/linux-fundamentals-architecture-and-debugging\|Linux Fundamentals, Architecture & Debugging]] | [[notes/Linux/linux-fundamentals-architecture-and-debugging\|Full notes -->]] |
+| [[summaries/Linux/booting-linux-on-a-windows-pc\|Booting Linux on a Windows PC]] | [[notes/Linux/booting-linux-on-a-windows-pc\|Full notes -->]] |

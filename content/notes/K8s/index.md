@@ -21,6 +21,7 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 
 ## Operators & Extension APIs
 - [[notes/K8s/kubebuilder-controllers-and-webhooks|Kubebuilder Controllers, Webhooks & Extension APIs]] — Reconcile loops, CRD versioning, admission webhooks, extension API servers
+- [[notes/K8s/index-lifecycle-jobs-on-kubernetes|Exactly-Once Jobs Without a Controller]] — Hashing a spec into an object name for change-triggered Jobs, a search-index lifecycle state machine, initContainers as a workflow engine, why delete-by-query cadence sets an IO floor, and why a controller deriving shared state from local state can't be duplicated
 
 ## Fundamentals
 - [[notes/K8s/interactive-containers-piping-and-ttys|Interactive Containers, Piping & TTYs]] — How kubectl exec/attach works, Unix pipes, and the TTY abstraction

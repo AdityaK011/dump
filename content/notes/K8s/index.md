@@ -22,6 +22,9 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 ## Storage
 - [[notes/K8s/waitforfirstconsumer-bound-vs-attached|Bound Is Not Attached]] — Why `WaitForFirstConsumer` won't keep a PVC `Pending` for a *compatible* node, the four-stage Provision/Bind/Attach/Mount split and who owns each, why PV topology is zone-shaped and machine family is invisible to the scheduler, and how a machine-family + disk-type migration strands a disk on the wrong node
 
+## Observability & Metrics
+- [[notes/K8s/when-gauge-sums-lie|When Gauge Sums Lie]] — Three independent ways query-time aggregation corrupts gauge metrics: a wrong declared submission interval silently scaling every value (×0.75, ×0.25), ghost series double-counting churned pods at coarse rollups, and duplicate emitters from leader-elected exporters — plus why ratios cancel the error, why counters don't have the problem, and when to stop reconstructing facts at query time and pre-aggregate at the source
+
 ## Operators & Extension APIs
 - [[notes/K8s/kubebuilder-controllers-and-webhooks|Kubebuilder Controllers, Webhooks & Extension APIs]] — Reconcile loops, CRD versioning, admission webhooks, extension API servers
 

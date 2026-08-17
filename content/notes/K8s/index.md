@@ -19,6 +19,9 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 - [[notes/K8s/vpa-eviction-loops|The VPA Eviction Loop]] — Why VPA right-sizing can evict a pod forever, how multiple VPAs on one Deployment jam admission (oldest wins, Off-mode skipped), and why single-replica long-running workers are the classic victims
 - [[notes/K8s/server-side-apply-replicas-collapse|SSA Deletes Your Replicas]] — How a CD migration to Server-Side Apply collapsed an HPA-managed fleet to 1 via the `before-first-apply` ownership migration, why the *second* apply breaks not the first, and why a PDB can't protect a replica count
 
+## Storage
+- [[notes/K8s/waitforfirstconsumer-bound-vs-attached|Bound Is Not Attached]] — Why `WaitForFirstConsumer` won't keep a PVC `Pending` for a *compatible* node, the four-stage Provision/Bind/Attach/Mount split and who owns each, why PV topology is zone-shaped and machine family is invisible to the scheduler, and how a machine-family + disk-type migration strands a disk on the wrong node
+
 ## Operators & Extension APIs
 - [[notes/K8s/kubebuilder-controllers-and-webhooks|Kubebuilder Controllers, Webhooks & Extension APIs]] — Reconcile loops, CRD versioning, admission webhooks, extension API servers
 

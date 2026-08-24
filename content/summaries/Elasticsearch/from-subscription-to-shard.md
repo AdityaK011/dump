@@ -2,7 +2,7 @@
 title: "Summary: From Subscription to Shard"
 ---
 
-> **Full notes:** [[notes/K8s/from-subscription-to-shard|From Subscription to Shard: The Write Path of a Managed Search Platform -->]]
+> **Full notes:** [[notes/Elasticsearch/from-subscription-to-shard|From Subscription to Shard: The Write Path of a Managed Search Platform -->]]
 
 ## Key Concepts
 

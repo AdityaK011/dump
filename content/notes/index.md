@@ -7,6 +7,7 @@ Detailed technical notes organized by topic.
 ## Topics
 
 - [[notes/K8s/index|Kubernetes]] — Container orchestration, GKE, networking, autoscaling, service mesh, and operators
+- [[notes/Elasticsearch/index|Elasticsearch]] — Search platform anatomy, the ingestion write path, tenancy models, and ES internals
 - [[notes/Networking/index|Networking]] — TCP internals, TLS, HTTP/gRPC, protocols, privacy, and transport layers
 - [[notes/AuthNZ/index|AuthNZ]] — OAuth, OIDC, JWT, Workload Identity Federation, and token management
 - [[notes/Learning/index|Learning]] — Reading plans and study guides

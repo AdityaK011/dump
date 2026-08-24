@@ -188,6 +188,6 @@ Step 5 is the archaeology: the `selected-node` annotation names the node that fi
 
 ## Related notes
 
-- [[notes/K8s/elasticsearch-as-a-service-on-kubernetes|Elasticsearch as a Service on Kubernetes]] — why storage is the rigid layer of a stateful platform, and how disk choices constrain everything above them
+- [[notes/Elasticsearch/elasticsearch-as-a-service-on-kubernetes|Elasticsearch as a Service on Kubernetes]] — why storage is the rigid layer of a stateful platform, and how disk choices constrain everything above them
 - [[notes/K8s/kubernetes-autoscaling|Kubernetes Autoscaling]] — the scheduling and node-provisioning machinery that decides where a pod actually lands
 - [[notes/K8s/vpa-eviction-loops|The VPA Eviction Loop]] — another failure where a reschedule you didn't ask for moves a pod somewhere it shouldn't be

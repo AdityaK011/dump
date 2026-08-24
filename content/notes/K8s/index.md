@@ -35,5 +35,4 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 - [[notes/K8s/k8scope-mcp-server|k8scope MCP Server]] — Building a Kubernetes MCP server with OAuth 2.0 proxy, Dynamic Client Registration, StreamableHTTP transport, and structured read-only tools
 
 ## Stateful Platforms
-- [[notes/K8s/elasticsearch-as-a-service-on-kubernetes|Elasticsearch as a Service on Kubernetes]] — Anatomy of a multi-tenant search platform: operator vs platform ownership, attribute-based shard pinning, why storage is the rigid layer, the index lifecycle state machine, replica-copy autoscaling quantisation, why node-level disk metrics can't attribute load to a tenant, and the economics of unbundled IOPS billing
-- [[notes/K8s/from-subscription-to-shard|From Subscription to Shard]] — The write path of a managed search platform: filtered Pub/Sub subscriptions, self-submitting Dataflow feeders, external versioning as the glue for at-least-once delivery and snapshot∪backlog bootstrap, who does what in a restore (coordinating holds connections, master holds state, data nodes hold bytes), and a production race where the autoscaler killed the pod holding a `wait_for_completion` connection — twice
+Moved to their own topic: [[notes/Elasticsearch/index|Elasticsearch]] — platform anatomy, the write path, and tenancy models.

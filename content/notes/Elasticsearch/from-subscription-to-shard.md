@@ -8,7 +8,7 @@ The task looked administrative: enable a scaling feature on a production Elastic
 
 Executing that plan meant touching every layer of the platform's *write path*: a Terraform PR creating a single Pub/Sub subscription, a GitOps index entry that hydrates into Kubernetes Jobs, a Dataflow streaming job nobody starts by hand, an internal load balancer, a coordinating node, a master, and finally the data nodes. And because a Job failed twice in the middle of it — with `curl` exit 52, while the operation it was waiting for succeeded both times — I ended up having to actually understand each hop instead of trusting the runbook.
 
-This note is the companion to [[notes/K8s/elasticsearch-as-a-service-on-kubernetes|Elasticsearch as a Service on Kubernetes]], which covers the cluster anatomy: nodeSets, shard pinning, the index lifecycle state machine, autoscaling. This one covers how a document *gets into* that cluster — the ingestion pipeline, the snapshot-bootstrap arithmetic, what each Elasticsearch node role actually does during a restore and a bulk write, and the production race we hit at the seam between them.
+This note is the companion to [[notes/Elasticsearch/elasticsearch-as-a-service-on-kubernetes|Elasticsearch as a Service on Kubernetes]], which covers the cluster anatomy: nodeSets, shard pinning, the index lifecycle state machine, autoscaling. This one covers how a document *gets into* that cluster — the ingestion pipeline, the snapshot-bootstrap arithmetic, what each Elasticsearch node role actually does during a restore and a bulk write, and the production race we hit at the seam between them.
 
 ## The write path at 10,000 feet
 

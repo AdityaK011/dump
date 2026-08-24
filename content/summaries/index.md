@@ -19,11 +19,17 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | [[summaries/K8s/istio-traffic-management-and-security\|Istio Traffic Management & Security]] | [[notes/K8s/istio-traffic-management-and-security\|Full notes -->]] |
 | [[summaries/K8s/service-mesh-multi-cluster-and-advanced-patterns\|Service Mesh, Multi-Cluster & Advanced Patterns]] | [[notes/K8s/service-mesh-multi-cluster-and-advanced-patterns\|Full notes -->]] |
 | [[summaries/K8s/kubebuilder-controllers-and-webhooks\|Kubebuilder Controllers, Webhooks & Extension APIs]] | [[notes/K8s/kubebuilder-controllers-and-webhooks\|Full notes -->]] |
-| [[summaries/K8s/elasticsearch-as-a-service-on-kubernetes\|Elasticsearch as a Service on Kubernetes]] | [[notes/K8s/elasticsearch-as-a-service-on-kubernetes\|Full notes -->]] |
 | [[summaries/K8s/interactive-containers-piping-and-ttys\|Interactive Containers, Piping & TTYs]] | [[notes/K8s/interactive-containers-piping-and-ttys\|Full notes -->]] |
 | [[summaries/K8s/k8scope-mcp-server\|k8scope MCP Server]] | [[notes/K8s/k8scope-mcp-server\|Full notes -->]] |
 | [[summaries/K8s/when-gauge-sums-lie\|When Gauge Sums Lie]] | [[notes/K8s/when-gauge-sums-lie\|Full notes -->]] |
-| [[summaries/K8s/from-subscription-to-shard\|From Subscription to Shard]] | [[notes/K8s/from-subscription-to-shard\|Full notes -->]] |
+
+## Elasticsearch
+
+| Summary | Full Note |
+|---------|-----------|
+| [[summaries/Elasticsearch/elasticsearch-as-a-service-on-kubernetes\|Elasticsearch as a Service on Kubernetes]] | [[notes/Elasticsearch/elasticsearch-as-a-service-on-kubernetes\|Full notes -->]] |
+| [[summaries/Elasticsearch/from-subscription-to-shard\|From Subscription to Shard]] | [[notes/Elasticsearch/from-subscription-to-shard\|Full notes -->]] |
+| [[summaries/Elasticsearch/bring-your-own-index\|Bring Your Own Index]] | [[notes/Elasticsearch/bring-your-own-index\|Full notes -->]] |
 
 ## Networking
 

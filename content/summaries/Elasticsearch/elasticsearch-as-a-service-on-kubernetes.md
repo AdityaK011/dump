@@ -2,7 +2,7 @@
 title: "Summary: Elasticsearch as a Service on Kubernetes"
 ---
 
-> **Full notes:** [[notes/K8s/elasticsearch-as-a-service-on-kubernetes|Elasticsearch as a Service on Kubernetes: Anatomy of a Multi-Tenant Search Platform -->]]
+> **Full notes:** [[notes/Elasticsearch/elasticsearch-as-a-service-on-kubernetes|Elasticsearch as a Service on Kubernetes: Anatomy of a Multi-Tenant Search Platform -->]]
 
 ## Key Concepts
 

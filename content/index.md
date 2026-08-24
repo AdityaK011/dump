@@ -12,6 +12,7 @@ Welcome to my digital garden — a collection of notes, reading plans, and ideas
 ## Topics
 
 - [[notes/K8s/index|Kubernetes]] — GKE internals, networking, autoscaling, service mesh, operators, and tooling
+- [[notes/Elasticsearch/index|Elasticsearch]] — Search platform anatomy, the ingestion write path, tenancy models, and ES internals
 - [[notes/Networking/index|Networking]] — TCP internals, TLS, HTTP/gRPC, cellular networks, DNS privacy, QUIC
 - [[notes/AuthNZ/index|AuthNZ]] — OAuth, OIDC, Workload Identity Federation, and token management
 - [[notes/Learning/index|Learning]] — Reading plans and study guides

@@ -308,3 +308,10 @@ What pre-aggregation does **not** solve is Act 3 — it's still a leader-elected
 9. **Size transients before engineering around them.** A 60-second overlap once per 15 hours is 0.1% error on a weekly view. The workaround can easily cost more than the bug.
 10. **If a fact needs a join that the metric model can't express, stop querying and start emitting.** Pre-aggregating at the source collapses cardinality, kills the churn artifacts, and lets you fix semantics once instead of in every query.
 11. **Write the caveat on the artifact, not in a doc nobody opens.** Which columns are exact, which are approximate, which aggregator must not be changed — on the widget itself.
+
+---
+
+## Related notes
+
+- [[notes/K8s/node-log-pipeline-silent-failures|Alive But Not Shipping]] — the logging counterpart: a node's log agent stalls with zero errors, and the alert that would have caught it is silenced when its metrics exporter dies and the series goes *absent* rather than zero
+- [[notes/K8s/kubernetes-autoscaling|Kubernetes Autoscaling]] — where the pod and node churn that produces ghost series comes from

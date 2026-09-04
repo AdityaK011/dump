@@ -126,3 +126,4 @@ A tight runbook when you see periodic, unexplained pod churn:
 
 - [[notes/K8s/kubernetes-autoscaling|Kubernetes Autoscaling]] — VPA's Recommender/Updater/Admission Controller, the four update modes, and the HPA/VPA feedback-loop hazard
 - [[notes/K8s/kubebuilder-controllers-and-webhooks|Kubebuilder Controllers & Admission Webhooks]] — how mutating admission webhooks (like VPA's) intercept and rewrite pods
+- [[notes/K8s/node-log-pipeline-silent-failures|Alive But Not Shipping]] — the mirror-image probe problem: a component that hangs instead of crashing is never restarted, because liveness was testing error rate rather than forward progress

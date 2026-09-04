@@ -22,7 +22,8 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 ## Storage
 - [[notes/K8s/waitforfirstconsumer-bound-vs-attached|Bound Is Not Attached]] — Why `WaitForFirstConsumer` won't keep a PVC `Pending` for a *compatible* node, the four-stage Provision/Bind/Attach/Mount split and who owns each, why PV topology is zone-shaped and machine family is invisible to the scheduler, and how a machine-family + disk-type migration strands a disk on the wrong node
 
-## Observability & Metrics
+## Observability, Metrics & Logging
+- [[notes/K8s/node-log-pipeline-silent-failures|Alive But Not Shipping]] — How a node-level log pipeline works end to end (fluent-bit DaemonSet → Cloud Logging → Log Router → BigQuery) and three ways it fails silently: an engine wedged in a level-triggered `EAGAIN` retry spin — one core pinned, zero errors, no restart, and a health endpoint that reads `ok` straight through it because it measures error rate on a different thread; segfaults surfacing in the agent's own metrics-collection timer (a corruption *detector*, not the cause) plus a crash-looping telemetry container that makes the throughput series go *absent* rather than zero; and BigQuery sink schema mismatches diverting entries into an `export_errors` dead-letter table nobody queries — plus blast-radius shape as the triage primitive, why rotation makes node-side loss unrecoverable, and the one per-node canary that covers all of it
 - [[notes/K8s/when-gauge-sums-lie|When Gauge Sums Lie]] — Three independent ways query-time aggregation corrupts gauge metrics: a wrong declared submission interval silently scaling every value (×0.75, ×0.25), ghost series double-counting churned pods at coarse rollups, and duplicate emitters from leader-elected exporters — plus why ratios cancel the error, why counters don't have the problem, and when to stop reconstructing facts at query time and pre-aggregate at the source
 
 ## Operators & Extension APIs

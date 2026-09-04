@@ -22,6 +22,7 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | [[summaries/K8s/interactive-containers-piping-and-ttys\|Interactive Containers, Piping & TTYs]] | [[notes/K8s/interactive-containers-piping-and-ttys\|Full notes -->]] |
 | [[summaries/K8s/k8scope-mcp-server\|k8scope MCP Server]] | [[notes/K8s/k8scope-mcp-server\|Full notes -->]] |
 | [[summaries/K8s/when-gauge-sums-lie\|When Gauge Sums Lie]] | [[notes/K8s/when-gauge-sums-lie\|Full notes -->]] |
+| [[summaries/K8s/node-log-pipeline-silent-failures\|Alive But Not Shipping]] | [[notes/K8s/node-log-pipeline-silent-failures\|Full notes -->]] |
 
 ## Elasticsearch
 

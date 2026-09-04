@@ -354,5 +354,6 @@ top -H                                      # live CPU/mem by thread
 
 - [[notes/Networking/container-networking-internals|Container Networking Internals]] — Linux network namespaces, bridges, iptables, and veth pairs
 - [[notes/Linux/booting-linux-on-a-windows-pc|Booting Linux on a Windows PC]] — UEFI NVRAM, Secure Boot shim chain, and GRUB recovery chroot
+- [[notes/K8s/node-log-pipeline-silent-failures|Alive But Not Shipping]] — these tools applied to a real hang: using `top -H`, `strace -c`, `perf top` and `eu-stack` to prove a process is spinning in userspace rather than blocked in a syscall
 
 External anchors worth bookmarking: `man7.org` (the canonical man pages), LWN.net (kernel development), and Brendan Gregg's site (performance & tracing methodology).

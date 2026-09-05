@@ -18,6 +18,7 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | [[summaries/K8s/istio-and-envoy-internals\|Istio & Envoy Internals]] | [[notes/K8s/istio-and-envoy-internals\|Full notes -->]] |
 | [[summaries/K8s/istio-traffic-management-and-security\|Istio Traffic Management & Security]] | [[notes/K8s/istio-traffic-management-and-security\|Full notes -->]] |
 | [[summaries/K8s/service-mesh-multi-cluster-and-advanced-patterns\|Service Mesh, Multi-Cluster & Advanced Patterns]] | [[notes/K8s/service-mesh-multi-cluster-and-advanced-patterns\|Full notes -->]] |
+| [[summaries/K8s/cue-kubernetes-config-at-scale\|CUE-Based Kubernetes Config at Scale]] | [[notes/K8s/cue-kubernetes-config-at-scale\|Full notes -->]] |
 | [[summaries/K8s/kubebuilder-controllers-and-webhooks\|Kubebuilder Controllers, Webhooks & Extension APIs]] | [[notes/K8s/kubebuilder-controllers-and-webhooks\|Full notes -->]] |
 | [[summaries/K8s/interactive-containers-piping-and-ttys\|Interactive Containers, Piping & TTYs]] | [[notes/K8s/interactive-containers-piping-and-ttys\|Full notes -->]] |
 | [[summaries/K8s/k8scope-mcp-server\|k8scope MCP Server]] | [[notes/K8s/k8scope-mcp-server\|Full notes -->]] |

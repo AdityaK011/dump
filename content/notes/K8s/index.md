@@ -2,7 +2,7 @@
 title: Kubernetes
 ---
 
-Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling, and tooling.
+Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling, config delivery, and tooling.
 
 ## GKE & Load Balancing
 - [[notes/K8s/gke-request-path-and-load-balancing|GKE Request Path & Load Balancing]] — How a request travels from browser to pod through GCP's global infrastructure
@@ -25,6 +25,9 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 ## Observability, Metrics & Logging
 - [[notes/K8s/node-log-pipeline-silent-failures|Alive But Not Shipping]] — How a node-level log pipeline works end to end (fluent-bit DaemonSet → Cloud Logging → Log Router → BigQuery) and three ways it fails silently: an engine wedged in a level-triggered `EAGAIN` retry spin — one core pinned, zero errors, no restart, and a health endpoint that reads `ok` straight through it because it measures error rate on a different thread; segfaults surfacing in the agent's own metrics-collection timer (a corruption *detector*, not the cause) plus a crash-looping telemetry container that makes the throughput series go *absent* rather than zero; and BigQuery sink schema mismatches diverting entries into an `export_errors` dead-letter table nobody queries — plus blast-radius shape as the triage primitive, why rotation makes node-side loss unrecoverable, and the one per-node canary that covers all of it
 - [[notes/K8s/when-gauge-sums-lie|When Gauge Sums Lie]] — Three independent ways query-time aggregation corrupts gauge metrics: a wrong declared submission interval silently scaling every value (×0.75, ×0.25), ghost series double-counting churned pods at coarse rollups, and duplicate emitters from leader-elected exporters — plus why ratios cancel the error, why counters don't have the problem, and when to stop reconstructing facts at query time and pre-aggregate at the source
+
+## Configuration & Continuous Delivery
+- [[notes/K8s/cue-kubernetes-config-at-scale|CUE-Based Kubernetes Config at Scale]] — How a hundreds-of-services config monorepo works when CUE compiles ("hydrates") into committed YAML that a GitOps controller syncs: unification vs templating, the `Delivery` key as the unit of hydration/deployment/image-automation/pruning, why plan is a merge-base git diff and apply only upserts a CD configuration CRD, the three independent deletion mechanisms plus the hydration gap that leaves dead folders behind, and a four-layer CI failure where renaming `generateName` to `name` broke a prune-time CUE interpolation — with the real fix living in a `go:embed`'d binary rather than the vendored CUE everyone was editing
 
 ## Operators & Extension APIs
 - [[notes/K8s/kubebuilder-controllers-and-webhooks|Kubebuilder Controllers, Webhooks & Extension APIs]] — Reconcile loops, CRD versioning, admission webhooks, extension API servers

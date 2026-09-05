@@ -94,7 +94,7 @@ What you want is: **run this pipeline exactly once, when its definition changes.
 - Spec changes → hash changes → new object name → the apply creates a Job → **it runs.**
 - Spec unchanged → same name → the Job exists → the apply is a **no-op.**
 
-Exactly-once, change-triggered execution from a plain GitOps apply loop. No controller, no state store — **the Job's existence is the idempotency record.** This generalises nicely to schema migrations, one-shot backfills, and cache warms.
+Exactly-once, change-triggered execution from a plain GitOps apply loop. No controller, no state store — **the Job's existence is the idempotency record.** This generalises nicely to schema migrations, one-shot backfills, and cache warms. (For how that config layer compiles down to the YAML the apply loop consumes, see [[notes/K8s/cue-kubernetes-config-at-scale|CUE-Based Kubernetes Config at Scale]] — including why resource *identity* is `kind/metadata.name` and what that does to name-less objects.)
 
 The costs are real, though. You **can't re-run without changing config** — a Job that failed for environmental reasons won't retry on re-apply, so recovery means deleting the object by hand. The hash covers the *whole* spec, so an unrelated image or resource tweak **re-triggers the entire pipeline** (survivable only because each stage is check-then-act idempotent). And with no TTL, finished Jobs accumulate — unbounded growth, but also a free timestamped audit trail of every transition an index has been through.
 

@@ -27,11 +27,13 @@ So the logs exist. The files exist. One agent reads them fine. The other agent i
 
 Three separate mechanisms conspired here, and pulling them apart is the whole point of this note:
 
-1. A **hung agent engine** — a live process, pinned at exactly one core, flushing nothing, logging nothing, and never restarting because nothing was watching for *progress*.
-2. **Segfaults in the metrics path** — crashes surfacing inside the agent's own metrics-collection code: loud, counted, self-healing, and almost impact-free. Restart noise like this is the classic decoy, and in multi-container logging DaemonSets the same class of bug can also blind the one alert that could have caught #1.
+1. A **hung agent engine** — a live process, pinned at exactly one core, flushing nothing, logging nothing, and never restarting because nothing was watching for *progress*. The confirmed cause is a **userspace infinite loop**: a once-per-second bookkeeping walk over the agent's own metrics went round a circular linked list that no longer contained its own head, because one of its nodes had been freed while still linked and then reallocated during an error burst. Not a network retry spin, not a deadlock, not backpressure.
+2. **Segfaults in the metrics path** — the *same* defect, in the *same* function, on the *same* thread, landing differently. A stale pointer into unmapped memory faults and the container restarts; a stale pointer into a valid ring loops forever and nothing restarts. So the crashes are loud, counted and self-healing while the hangs are silent and permanent, which makes the crashes read as a decoy. They are better understood as a **leading indicator** of #1. And in multi-container logging DaemonSets the same class of bug can also blind the one alert that could have caught #1.
 3. A **schema mismatch at the export sink**, downstream of everything above, quietly diverting a different set of entries into a dead-letter table nobody has ever queried, for a completely different reason and with a completely different blast-radius shape.
 
-The shapes are the diagnostic. One is node-shaped and total, one is cosmetic, one is field-shaped and partial. Getting good at reading blast-radius shape is most of what this note teaches.
+The shapes are the diagnostic. One is node-shaped and total, one is self-healing, one is field-shaped and partial. Getting good at reading blast-radius shape is most of what this note teaches.
+
+> The OS-level half of #1 and #2 — threads, `/proc`, tick accounting, the heap, what `free()` actually does, intrusive circular lists, and the `ptrace` sampling that proved it — is built up from scratch in [[notes/Linux/anatomy-of-a-userspace-hang|Anatomy of a Userspace Hang]]. This note stays on the operational side.
 
 ---
 
@@ -218,7 +220,9 @@ To understand why one wedged process takes down an entire node's logging — wit
 
 Six-ish OS threads for a typical config, and the important asymmetry is that **only one of them can advance the pipeline**. Three consequences fall straight out:
 
-**One non-yielding coroutine on the engine thread stalls everything on the node.** Coroutine scheduling is cooperative: a coroutine yields voluntarily, typically when it hits a network wait. One that never yields — because it's spinning in a retry loop, or looping in a parser — is never preempted, and nothing else on that loop runs. Inputs stop being read, filters stop, timers stop firing. Every pod on the node stops shipping at the same instant, which is precisely the node-shaped, total blast radius we observed.
+**One non-yielding callback on the engine thread stalls everything on the node.** Scheduling here is cooperative: a coroutine yields voluntarily, typically when it hits a network wait, and a timer callback simply runs to completion. Anything that never returns — a retry loop, a parser, or a bookkeeping walk over a corrupted structure — is never preempted, and nothing else on that loop runs. Inputs stop being read, filters stop, retry timers never fire, and the metrics snapshot freezes. Every pod on the node stops shipping at the same instant, which is precisely the node-shaped, total blast radius we observed.
+
+Worth noting which callback it turned out to be, because it is not the one anyone guesses: **the 1-second metrics timer**. A periodic walk over the agent's own counters is what took down logging for every application pod on the node.
 
 **The monitoring HTTP server is a different thread, so `:2020` keeps answering while the engine is dead.** Worse, it answers *plausibly*. Two endpoints diverge in a way that is itself the diagnostic:
 
@@ -272,6 +276,8 @@ CPU (cores)
 ```
 
 Two flat lines that start at the same instant, one at zero and one at one core. Nothing else in this system produces that pattern.
+
+One caveat before you build a detector on the CPU shape. A fleet sweep for zero output found **101 non-shipping nodes out of 852**, and they split into two shapes: **78 pinned at a flat one core** (the loop analysed below) and **23 sitting at exactly 0 m of CPU**, also `1/1 Ready`, also with zero restarts, also shipping nothing. Zero CPU with work outstanding is the deadlock signature, not the spin signature, so that is a *second* bug and it is still open. The consequence for detection is blunt: searching for pods near one core found 54 of the 101, while asking "which nodes ship nothing" found all of them. Symptom-shaped detectors under-count; the outcome-shaped one does not.
 
 ### Why nothing restarted it
 
@@ -390,7 +396,7 @@ Step 4 is the one that splits the diagnosis cleanly:
 |---|---|
 | Tens of thousands of `read`/`recvfrom` per second, **all `EAGAIN`** | The classic TLS/socket spin — see the next section. Most common real case |
 | Tight `epoll_wait` returning immediately with timeout 0 | Event-loop spin: an fd is permanently ready or a stale node sits in the ready queue, and the handler never drains or unregisters it |
-| **No syscalls at all**, CPU at 100% | Pure userspace loop — a parser, filter, or bookkeeping loop that never advances its cursor |
+| **No syscalls at all**, CPU at 100% | Pure userspace loop — a parser, filter, or bookkeeping loop that never terminates. **This is what the confirmed hang looked like**, and an empty `strace -c` table is the *positive* finding, not "it's doing nothing". Escalate to `ptrace`/`perf` to find the loop |
 | Blocked in one `write`/`read`/`futex`, CPU **~0%** | Deadlock or a saturated internal channel, *not* the busy-loop class |
 | `nanosleep` + `epoll_wait` in a slow rhythm | Healthy idle |
 
@@ -413,9 +419,42 @@ A hot symbol plus a stack turns "the agent hangs sometimes" into an upstream bug
 
 ### What actually wedges the engine
 
-"It hangs sometimes" is not a root cause, and the real mechanisms are worth knowing because most of them have a config-level mitigation available today. The dominant class, by a wide margin:
+"It hangs sometimes" is not a root cause, and the real mechanisms are worth knowing because most of them have a config-level mitigation available today.
 
-**The level-triggered TLS retry spin.** A TLS output has a connection that the peer has abandoned without a clean close — the socket stays `ESTABLISHED` with an empty receive queue. Then:
+**What it was here: a userspace infinite loop in the metrics-copy list walk.** This is the confirmed mechanism, and it is worth leading with because it is the one class in the whole family that has *no* config-level mitigation at all.
+
+The agent's metrics library keeps each metric instance's label values in an **intrusive circular doubly linked list**, the same shape as the kernel's `list_head`, with the head embedded as a sentinel in the owning struct. Walking one is always `for (it = head->next; it != head; it = it->next)`, and the only termination condition that exists is arriving back at the head address. No NULL terminator, no length field, no iteration cap.
+
+Once a second, on the engine loop, the metrics timer copies the entire metrics tree for the exporter, and copying a label list starts by counting it. So every metric's label list is walked in full, every second.
+
+```
+ a label node was freed WITHOUT being unlinked from its list
+        │
+        │  free() does not erase the chunk. it overwrites the first 16 bytes with
+        │  allocator bookkeeping and leaves the rest verbatim, so the ring still
+        │  walked correctly and there was NO SYMPTOM. for weeks.
+        ▼
+ the first 403 response created a new metric, requests_total{status="403", ...}
+        │
+        │  its label nodes needed the same size class, and glibc's tcache is LIFO,
+        │  so the allocator handed back exactly that freed chunk
+        ▼
+ now two owners share one node:
+        the 403 metric's list is a healthy ring:   B → C → A → B
+        the stuck metric's head still points at A: head → A → B → C → A → ...
+        head is OUTSIDE the ring it points into, so `it != head` is true forever
+        ▼
+ the next tick of the metrics timer enters the count loop and never returns.
+ seven instructions, no calls, no syscalls, one core, permanently.
+```
+
+Two properties of that make it maximally hostile to operators. The loop makes **no system calls**, so `strace -c` prints an empty table and the reflex conclusion is "the process is doing nothing" (the correct reading of an empty table is the opposite: pure userspace loop). And every pointer involved is valid, so nothing faults, nothing errors, and nothing is logged.
+
+The decisive measurement, if you get to a live one, takes three seconds and needs only `cat`: sample `/proc/<pid>/task/*/stat` twice and diff fields 14 and 15, which are user and kernel CPU time in 100 Hz ticks. The hung engine thread showed **+313 user ticks and +1 kernel tick over three seconds**, meaning 1.04 cores of pure userspace execution with 0.3% of the time in the kernel. That single ratio eliminates every syscall-spin theory below, including the next one.
+
+The mitigation is a version upgrade, plus outcome-based detection so the next instance is a page rather than an archaeology project. There is no knob. Full derivation, including the `ptrace` sampling that proved it and the memory dump that pinned the reuse, is in [[notes/Linux/anatomy-of-a-userspace-hang|Anatomy of a Userspace Hang]].
+
+**The best-known class, and the one to rule out first: the level-triggered TLS retry spin.** A TLS output has a connection that the peer has abandoned without a clean close — the socket stays `ESTABLISHED` with an empty receive queue. Then:
 
 ```
  SSL_read()  ──▶  read()  ──▶  EAGAIN            "no data right now"
@@ -432,6 +471,8 @@ A hot symbol plus a stack turns "the agent hangs sometimes" into an upstream bug
 The loop never blocks and never yields usefully, so the thread pins one core and every flush behind it stops. Reported profiles match the fingerprint exactly: `strace -c` showing ~17,000 `read()` calls in two seconds all returning `EAGAIN`, `output_proc_records_total` frozen, `output_errors_total` at **0**, and a socket whose last receive was days earlier — a process stuck for three days without a single log line.
 
 The mitigation is embarrassingly cheap and available on every version: **`net.io_timeout` defaults to `0s`, meaning no timeout at all.** Set it to something finite on every network output and the loop terminates with an error instead of spinning. Errors are recoverable; spins are not. (Upstream's eventual fix was architectural — coroutine-based event dispatch — but the generic retry-loop patch was never merged, so don't wait for a version bump.)
+
+Note how cheaply this is distinguished from the confirmed mechanism above, and do the measurement before assuming either. Both pin one core and both report zero errors, but this one is **syscall-heavy** (roughly 8,500 `read()` calls a second) while the list-walk loop makes none. The user/kernel CPU split tells them apart in three seconds, and the socket state corroborates it. Set `net.io_timeout` regardless, because it costs nothing and closes a real class — just don't expect it to fix a loop that never touches a socket.
 
 The rest of the family, briefly, because recognising the shape is what matters:
 
@@ -489,9 +530,69 @@ Read naively, that says "the metrics exporter is buggy." Read the lines immediat
 [engine] caught signal (SIGSEGV)
 ```
 
-In the captured case the credential-refresh path failed seconds before the fault, and there is a documented upstream report linking malformed HTTP requests to the metadata endpoint during token renewal to crashes. Treat that as one plausible corruption source, not the whole story: fleet-wide, crashes outnumbered token-refresh errors by more than ten to one, so most segfaults had no such prelude. What holds either way is the shape: the metrics timer walks *every* metric structure once a second, so it is the first thing to dereference whatever damage exists. It's the canary, not the gas leak.
+The credential-refresh path failed seconds before the fault, and there is a documented upstream report linking malformed HTTP requests to the metadata endpoint during token renewal to crashes. But that is a *prelude*, not a proven cause: fleet-wide, crashes outnumbered token-refresh errors by more than ten to one, so most segfaults had no such lead-in. What holds either way is the shape: the metrics timer walks *every* metric structure once a second, so it is the first thing to dereference whatever damage exists. It's the canary, not the gas leak.
 
 > A periodic full-structure walk is a corruption **detector**. The top of the stack names whoever tripped over the damage, not whoever caused it. Read the lines before the backtrace, not the frames in it.
+
+### The crash and the hang are one defect
+
+This is the correction that reorganises the whole note, and it came out of getting a thread stack from a live hung pod.
+
+The hung engine thread was spinning in `cfl_list_size`, reached through `copy_label_values ← copy_map ← copy_counter ← append_context ← cmt_cat ← flb_me_get_cmetrics ← collect_metrics ← flb_me_fd_event ← flb_engine_start`. Compare that against the crash backtrace above. **It is the same chain, frame for frame.** Same function, same call path, same thread, same one-second timer.
+
+So these are not two adjacent bugs. It is one **use-after-free**, and which symptom you get is decided by heap-layout luck:
+
+```
+        a metrics label node is freed while still linked into its list
+                              │
+                the chunk is later reallocated as …
+                              │
+         ┌────────────────────┴────────────────────┐
+         ▼                                         ▼
+  something that leaves garbage           a valid node in a DIFFERENT,
+  where `next` used to be                 perfectly healthy ring
+         │                                         │
+         ▼                                         ▼
+  the next dereference hits an            every dereference succeeds, but the
+  unmapped address                        walk never meets its own head
+         │                                         │
+         ▼                                         ▼
+      SIGSEGV                               INFINITE LOOP
+  exit 139, restart, seconds of loss    one core, no restart, months of loss
+  LOUD · COUNTED · SELF-HEALING          SILENT · UNCOUNTED · PERMANENT
+```
+
+Two operational conclusions follow, and both invert how the incident was originally triaged.
+
+**The crash rate is a leading indicator of the hang risk, not cosmetic noise.** A fleet doing thousands of segfaults a day inside a list walk is a fleet that will accumulate hung pods at whatever rate the allocator decides. Monitor it as a predictor.
+
+**The fix category is lifetime ownership, not error-path hardening.** Unlink before free, or don't free while linked, plus the upstream lifecycle fixes. The free site itself is still **not pinned down**: the live candidates are the dangling-pointer bugs in the token and metadata parsing path (a string buffer reallocated with the old pointer retained) and the map/concatenate lifecycle in the pinned version of the metrics library, which has had a long run of fixes upstream since. Stating that gap is more useful than guessing.
+
+### Retracted: "the error handling scribbled over the list"
+
+An earlier version of this note said the error-handling path had written the string `403` over the list nodes and corrupted them. That is wrong, and the way it was wrong is instructive.
+
+It was believable because a memory dump around the corrupted ring contained the string `403` and a logging API hostname, both of which the error path produces. That looks exactly like an error handler spraying response bytes over neighbouring structures.
+
+```
+ what we thought                        what it actually was
+ ───────────────────────────────────    ────────────────────────────────────────
+ the error path wrote "403" over        "403" is a LEGITIMATE LABEL VALUE. the
+ the list nodes and corrupted them      plugin declares requests_total{status,
+                                        name} and fills status from snprintf of
+                                        the HTTP status. the first 403 response
+                                        created a real new metric with a real
+                                        label node holding the string "403".
+
+ the nearby hostname string is          it is HEAP-NEIGHBOUR NOISE. the error
+ more evidence of the overwrite         path allocated several strings at about
+                                        the same time and they landed in
+                                        adjacent chunks in the same arena.
+```
+
+Two lessons worth more than the specific bug. **Read the source for the label keys before theorising about the bytes**, because we mistook a feature for wreckage. And **adjacency in a memory dump is not causation**, ever; error paths allocate, so error-path strings will always be near whatever else was allocated then.
+
+What settled it was what the dump did *not* show. A scribble leaves misaligned values, non-canonical addresses, half-overwritten pointers. Every pointer in that ring was well-formed, correctly aligned, and mutually consistent, forming a valid closed ring with valid `prev` links. **Well-formed structures encoding a wrong graph is the signature of reuse, not of overwriting.**
 
 Two structural consequences worth internalising:
 
@@ -499,7 +600,7 @@ Two structural consequences worth internalising:
 
 **A poison chunk survives the restart.** If the crash happens while decoding buffered data, the same chunk is replayed on startup and the process crashes again — a genuine crash loop with an external cause, not a flapping process. That's the case for `storage.delete_irrecoverable_chunks` (and for checking whether your version discards corrupt chunks at startup) rather than staring at restart counts.
 
-And the cruel juxtaposition that made the original incident confusing: crashes like this **do** restart the container, so they're loud, counted, and self-healing. Hangs are silent, uncounted, and permanent. Run a large fleet and you get both at once from adjacent causes — and the one that gets all the attention is the one that's fixing itself.
+And the cruel juxtaposition that made the original incident confusing: crashes like this **do** restart the container, so they're loud, counted, and self-healing. Hangs are silent, uncounted, and permanent. Run a large fleet and you get both at once from the *same* cause — and the one that gets all the attention is the one that's fixing itself. Any time a self-healing failure sits next to a non-self-healing one, expect the investigation to anchor on the wrong one.
 
 ### The decoy: restart counts belong to containers, not pods
 
@@ -852,17 +953,31 @@ Two caveats I'd raise unprompted. Restarting is only safe if buffering is on dis
 
 **A:** CPU is the tell, and it's binary enough to be diagnostic on its own. A **busy loop** executes continuously without progressing: on a single event loop that's exactly 100% of one core, flat, with RSS also flat because it isn't allocating. A **deadlock** or a blocking wait sits at ~0% CPU, parked in `futex`, `read`, or `write`.
 
-The most common real busy-loop mechanism is worth being able to describe precisely, because it explains why there are no errors. An output holds a TLS connection the peer has abandoned without a clean close. `SSL_read` calls `read`, which returns `EAGAIN`. The code re-arms the fd for readability — a no-op, it's already registered — and yields; but because epoll is **level-triggered** and the fd is still reported ready, the yield returns immediately and the code retries. That's thousands of iterations a second, forever, with no error ever recorded. The default `net.io_timeout` of `0s` is what makes it unbounded; a finite timeout turns it into an error.
+Then I'd split the busy-loop class further, because two mechanisms with the same CPU shape need completely different fixes, and one number separates them.
 
-From outside: `top -H -p <pid>` separates spin from block instantly. `timeout 5 strace -f -p <pid> -c` classifies it — tens of thousands of `EAGAIN` reads is the TLS spin, a tight zero-timeout `epoll_wait` is an event-loop spin over an fd nobody drains, **no syscalls at all** is a pure userspace loop in a parser or filter, and one blocked syscall at 0% CPU is a deadlock or a saturated internal channel. `ss -tinp` corroborates the spin case: `ESTABLISHED` with an empty receive queue and a `lastrcv` measured in days. `perf top -p` names the hot symbol, and `gdb`/`eu-stack` gives the backtrace for the bug report.
+The **syscall spin** is the well-known one. An output holds a TLS connection the peer has abandoned without a clean close. `SSL_read` calls `read`, which returns `EAGAIN`. The code re-arms the fd for readability — a no-op, it's already registered — and yields; but because epoll is **level-triggered** and the fd is still reported ready, the yield returns immediately and the code retries. Thousands of iterations a second, forever, with no error ever recorded. The default `net.io_timeout` of `0s` is what makes it unbounded, and a finite timeout turns it into an error.
 
-Both look identical from Kubernetes' point of view — running, no restarts — which is why a progress-based probe covers both while reachability and error-rate probes cover neither.
+The **userspace loop** is what the incident actually was, and it makes *no* system calls at all. A once-per-second walk over the agent's own metrics structures entered a circular linked list whose head had been detached from the ring, so `it != head` was true forever. Seven instructions, no calls, no syscalls, one core.
+
+The discriminator is the **user/kernel CPU split**, and it takes three seconds with `cat`. Sample `/proc/<pid>/task/*/stat` twice and diff fields 14 and 15, which are `utime` and `stime` in 100 Hz ticks. The hung engine thread showed `+313 utime, +1 stime` over three seconds: 1.04 cores of pure userspace with 0.3% kernel time. A retry spin doing 8,500 `read()` calls a second would have shown a mountain of `stime`. That one ratio redirected the whole investigation.
+
+From outside: `top -H -p <pid>` separates spin from block instantly. `timeout 5 strace -f -p <pid> -c` classifies it — tens of thousands of `EAGAIN` reads is the TLS spin, a tight zero-timeout `epoll_wait` is an event-loop spin over an fd nobody drains, **an empty table is the positive finding** for a userspace loop, and one blocked syscall at 0% CPU is a deadlock or a saturated internal channel. `ss -tinp` corroborates the spin case: `ESTABLISHED` with an empty receive queue and a `lastrcv` measured in days. For the userspace case, `perf top -p` names the hot symbol, or a `ptrace` sampler (`ATTACH`/`GETREGS`/`DETACH` in a loop) gives you an instruction-pointer histogram — 60 samples all landing in one function is a proof rather than a profile.
+
+Both look identical from Kubernetes' point of view — running, no restarts — which is why a progress-based probe covers both while reachability and error-rate probes cover neither. And I'd flag a third shape I have *not* explained: in the same sweep, 23 of 101 broken nodes sat at exactly 0% CPU rather than one core. That's the deadlock signature, it's a different bug, and I'd rather say so than assume the mechanism I proved for the spinning ones.
 
 ### Q: The agent was segfaulting in its metrics-collection code, and a telemetry sidecar had 214 restarts. Was either the cause?
 
 **A:** Neither, and both did damage anyway — which makes this a good question for showing how you separate correlation from cause.
 
-Take the segfault first. The backtrace ended in the agent's own metrics-exporter path, walking cmetrics structures on a one-second timer that runs on the engine thread. That reads as "the metrics code is buggy." The log lines immediately before it said something else: a token-parse failure and a failed oauth2 refresh. The credential-refresh path had corrupted the heap, and the metrics timer is simply the code that walks every metric structure once a second, so it's the first thing to dereference the damage. The general lesson is that **a periodic full-structure walk is a corruption detector** — the top of the stack names who tripped over the damage, not who caused it, so read the lines before the backtrace. It also argues for keeping telemetry inputs out of the process whose job is shipping logs, since the recurring crash reports in this codebase cluster in the metrics and events inputs, none of which are on the log path.
+Take the segfault first. The backtrace ended in the agent's own metrics-exporter path, walking cmetrics structures on a one-second timer that runs on the engine thread. That reads as "the metrics code is buggy," and it isn't. The metrics timer copies the entire metrics tree once a second, and copying a metric's label list starts by counting it, so it touches every metric structure in the process every second. It is therefore the first code to dereference any damage anywhere in that tree, regardless of who caused it. The general lesson is that **a periodic full-structure walk is a corruption detector** — the top of the stack names who tripped over the damage, not who caused it, so read the lines before the backtrace.
+
+The lines before it were a token-parse failure and a failed oauth2 refresh, which points at the credential path, and there are known dangling-pointer bugs in the metadata token fetch. But I'd be careful how strongly I state that, and this is where I'd show a correction to my own analysis. I originally claimed the error-handling path had **scribbled the string `403` over the list nodes**, because a memory dump around the corrupted ring contained `403` and a logging API hostname, which looks exactly like an error handler spraying response data over neighbouring structures.
+
+That was wrong twice over. The `403` is a **legitimate label value**: the plugin declares `requests_total{status, name}` and fills `status` from `snprintf` of the HTTP status code, so the first 403 response creates a real new metric with a real label node holding the string `403`. I had mistaken a feature for wreckage. And the hostname nearby was **heap-neighbour noise**, because the error path allocated several strings at about the same time and they landed in adjacent chunks. Adjacency in a dump is not causation.
+
+What settled it was what the dump did *not* show. A scribble leaves misaligned values and non-canonical addresses; every pointer in that ring was well-formed, aligned, and mutually consistent with valid `prev` links. Well-formed structures encoding a wrong graph is the signature of **reuse**, not overwriting. So the mechanism is a use-after-free: a label node freed while still linked, then handed back by the allocator as a label node of the newly created 403 metric, leaving the original owner's head pointing into a ring that no longer contained it.
+
+That correction matters because it changes the fix. An error-path overrun would be fixed with bounds checking in the error path; a use-after-free on a metrics structure is fixed with lifetime ownership, unlink before free, plus the upstream lifecycle fixes. Different patches, different files, different projects. It also means the crash and the *hang* were one defect rather than two, so the segfault rate is a leading indicator of hangs. It still argues for keeping telemetry inputs out of the process whose job is shipping logs, since the recurring crash reports in this codebase cluster in the metrics and events paths, none of which are on the log path.
 
 Then the sidecar. The container is the restart unit in Kubernetes; those 214 restarts belonged to the telemetry container while the agent container's own `restartCount` was 0. So the first move is always `-o jsonpath` over `status.containerStatuses[*]` for per-container counts and `lastState.terminated`. Exit 139 is `128 + 11`, so SIGSEGV — a memory-safety bug, not a config or limits problem, which matters for ownership: a 137 (OOMKilled) is mine to fix with limits or buffer sizing, a 139 is upstream's and my levers are version pinning or not running the faulting input.
 
@@ -924,6 +1039,7 @@ So: at-least-once in the happy path, lossy in specific enumerable failure modes,
 - **A hang is worse than a crash.** Crashes are loud, self-recovering, and counted. Prefer designs that die: bound buffers, set memory limits, and add progress probes so stalls become restarts. And note memory limits won't save you here — hung agents sit far below their limit, so the OOM killer never fires.
 - **Unbounded I/O waits are what turn a slow peer into a wedged process.** `net.io_timeout` defaults to *no timeout*, and a level-triggered event loop plus an `EAGAIN` retry path turns that into an infinite spin. Setting a finite I/O timeout converts an unrecoverable hang into a recoverable error — the cheapest fix in this note.
 - **A periodic full-structure walk is a corruption detector.** When a crash lands in metrics-collection code, the top of the stack names whoever tripped over the damage, not whoever caused it. Read the log lines *before* the backtrace, and keep telemetry inputs out of the process whose job is shipping logs.
+- **The crash and the hang here were one defect.** A metrics label node freed while still linked, then reallocated during a `403` burst: a stale pointer into unmapped memory faults (exit 139, self-healing), a stale pointer into a valid ring loops forever (one core, no restart, months of loss). So the segfault rate is a *leading indicator* of hangs, and the fix category is lifetime ownership rather than error-path hardening. The earlier "the error handling scribbled `403` over the list" story is retracted: the `403` was a legitimate label value and the neighbouring strings were heap-adjacency noise. **Adjacency in a memory dump is not causation.**
 - **The container is the restart unit.** Pod-level restart counts hide which container failed, and a loud irrelevant crash-loop next to a silent total failure is a powerful anchoring trap. Always look per container, and translate exit codes (137 OOM, 139 SIGSEGV, 143 SIGTERM).
 - **Never let the instrument share a failure domain with the subject.** When the metrics exporter died, throughput went *absent* rather than zero, and `== 0` rules don't fire on absent series. Alert on no-data at equal severity, and put the authoritative check outside the pod.
 - **Two independent agents on one node is a free controlled experiment.** They share only the substrate. If one works, the substrate is fine and the fault is inside the other binary.
@@ -941,6 +1057,7 @@ So: at-least-once in the happy path, lossy in specific enumerable failure modes,
 - [[notes/K8s/when-gauge-sums-lie|When Gauge Sums Lie]] — the other half of "the monitoring is lying to you": interval metadata, ghost series at coarse rollups, and duplicate emitters from leader-elected exporters
 - [[notes/K8s/vpa-eviction-loops|The VPA Eviction Loop]] — another failure that persists because the component that would fix it never applies its own output
 - [[notes/K8s/kubernetes-autoscaling|Kubernetes Autoscaling]] — node churn, which sets how long a broken agent survives before a rotation accidentally repairs it
+- [[notes/Linux/anatomy-of-a-userspace-hang|Anatomy of a Userspace Hang]] — the OS-level companion to this note: what `free()` actually does, why intrusive circular lists have no terminator but their own head, and the `ptrace` sampling and PIE symbolisation that proved the mechanism behind Failures 1 and 2
 - [[notes/Linux/linux-fundamentals-architecture-and-debugging|Linux Fundamentals, Architecture & Debugging]] — `strace`, `perf`, `/proc`, thread state, and signals: the toolbox for deciding whether a process is spinning or blocked
 - [[notes/K8s/interactive-containers-piping-and-ttys|Interactive Containers, Piping & TTYs]] — what stdout/stderr actually are inside a container, and how the runtime captures them
 - [[notes/AuthNZ/oauth-oidc-and-workload-identity|OAuth, OIDC & Workload Identity Federation]] — how the agent authenticates to the logging API, and the credential expiry class of shipping failure

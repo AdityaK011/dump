@@ -44,6 +44,7 @@ title: "Summary: Alive But Not Shipping"
 ### Failure 1 — hung engine
 - Fingerprint: **CPU flat at ~1.00 core**, RSS flat and far below the limit (so **no OOM rescue**), `uptime` climbing, input/output counters **frozen**, `errors_total` and `retries_failed_total` **0**, no logs since T, `restartCount` 0.
 - Flat-at-one-core = **busy loop**. Deadlock = **~0% CPU**. Backpressure = **retries + growing buffers**.
+- **Two shapes in the wild.** A sweep for zero output found **101 of 852 nodes**: **78 pinned at ~1 core** (the confirmed loop) and **23 at exactly 0 m CPU**, all `1/1 Ready` with 0 restarts. The 0-CPU variant has the deadlock signature and is a **different, still-open bug**. CPU-shape search found 54 of 101; the output-rate query found all 101.
 - **Three reasons nothing restarted it:**
   1. Self-managed DaemonSets often have **no probes at all**.
   2. Managed probes exist but test **reachability on the wrong thread** — GKE uses `httpGet / :2020`, served by the monitoring thread, which stays true throughout a hang.
@@ -52,19 +53,40 @@ title: "Summary: Alive But Not Shipping"
 - ⇒ **Liveness must test forward progress**, not reachability or error rate.
 
 ### What actually wedges the engine
-- **The level-triggered TLS retry spin (dominant class):** a peer abandons a connection without a clean close (socket `ESTABLISHED`, empty rx queue) → `SSL_read` → `read` → **`EAGAIN`** → re-arm the fd (**no-op**, already registered) → `flb_coro_yield()` returns **immediately** because epoll is **level-triggered** and the fd still reports ready → `goto retry_read` → **~8,500 iterations/s, forever**.
+- **CONFIRMED for this incident: a userspace infinite loop in the metrics-copy list walk.** No config mitigation exists for it.
+  - Label values live in an **intrusive circular doubly linked list** (kernel `list_head` shape, head embedded as a sentinel). The walk is `for (it = head->next; it != head; it = it->next)` and **the only terminator is identity with the head**: no NULL, no length, no cap.
+  - Once a second on the engine loop, `cmt_cat` copies the whole metrics tree and `copy_label_values` counts each label list via `cfl_list_size`. Every metric's label list, walked in full, every second.
+  - **Mechanism (use-after-free):** a label node was freed **while still linked**; `free()` clobbers only the first 16 bytes so the ring kept walking and there was **no symptom for weeks**; the **first 403** created `requests_total{status="403",…}`, whose label nodes took that exact chunk back (same size class, glibc tcache is **LIFO**); now the 403 metric's ring `B → C → A → B` is healthy while the stuck metric's `head → A` sits **outside** it, so `it != head` is true forever.
+  - **Free site is NOT pinned down.** Candidates: dangling pointers in the OAuth/metadata parser, or the pinned metrics library's map/cat lifecycle.
+  - **Decisive test, 3 seconds, `cat` only:** diff `/proc/<pid>/task/*/stat` fields **14/15** (`utime`/`stime`, 100 Hz ticks). Observed **+313 utime, +1 stime over 3 s** = 1.04 cores of *pure userspace*, 0.3% kernel. That kills every syscall-spin theory, including the next bullet.
+  - `strace -c` prints an **empty table**. That is the *positive* finding, not "it's doing nothing".
+  - Fix: version upgrade + outcome-based detection. See [[notes/Linux/anatomy-of-a-userspace-hang|Anatomy of a Userspace Hang]].
+- **The best-known class, to rule out first: the level-triggered TLS retry spin.** a peer abandons a connection without a clean close (socket `ESTABLISHED`, empty rx queue) → `SSL_read` → `read` → **`EAGAIN`** → re-arm the fd (**no-op**, already registered) → `flb_coro_yield()` returns **immediately** because epoll is **level-triggered** and the fd still reports ready → `goto retry_read` → **~8,500 iterations/s, forever**.
   - Reported evidence: ~17,000 `read()` in 2s all `EAGAIN`; `output_proc_records_total` frozen; `output_errors_total` **0**; socket `lastrcv` ≈ 3.6 **days**; a process stuck 3 days with zero log lines.
-  - **Fix available on every version: `net.io_timeout` defaults to `0s` (no timeout).** Set it finite ⇒ the spin becomes a recoverable error. Highest-value config change in the note.
+  - **Fix available on every version: `net.io_timeout` defaults to `0s` (no timeout).** Set it finite ⇒ the spin becomes a recoverable error. Highest-value *config* change in the note.
+  - **Distinguish it from the confirmed mechanism by the user/kernel CPU split**, not the CPU total: this one is syscall-heavy (~8,500 `read()`/s ⇒ large `stime`), the list walk makes none. Set `net.io_timeout` anyway; just don't expect it to fix a loop that never touches a socket.
 - Other classes: a stale connection node left in the event loop's ready queue after teardown (`epoll_wait` spins, socket `CLOSE_WAIT`); internal channel saturation (blocked in `write()`, **0% CPU**, HTTP still answers); threaded input + processors registered on the wrong event loop (100% CPU immediately); long-line/multiline reassembly (hours at 100%, then all inputs stop, sometimes OOM); fs-buffer chunk corruption or counter underflow ("no available chunk" forever); reload and shutdown spins.
 - **Not hangs, but identical on a dashboard:** permanent credential failure (one token error, then 401/403 on every flush forever, never self-recovers — but `errors_total` **climbs**, so an error-rate check *would* catch it); silent offset-persistence failure (`SQLITE_BUSY`/`LOCKED` fails without logging ⇒ **duplicates** after the next restart, not loss).
 
 ### Failure 2 — segfaults in the metrics path (and the decoy)
 - The crash backtrace ends in the agent's **own** metrics exporter walking cmetrics structures on the **1-second engine timer** (`cfl_list_size → copy_label_values → cmt_cat → flb_me_get_cmetrics → collect_metrics → flb_me_fd_event → flb_engine_start`).
-- The lines *before* it name the real cause: `unable to parse token body` / `cannot retrieve oauth2 token` — heap corruption in the **credential-refresh** path (malformed headers to the metadata endpoint).
+- The lines *before* it are the prelude, not proof: `unable to parse token body` / `cannot retrieve oauth2 token`. Fleet-wide, crashes outnumbered token errors **10:1**, so most segfaults had no such lead-in.
 - ⇒ **A periodic full-structure walk is a corruption detector.** The top of the stack names whoever tripped over the damage, not whoever caused it. **Read the log lines before the backtrace.**
+- **CONFIRMED: the crash and the hang are ONE defect.** The ptrace'd hang chain is **identical, frame for frame**, to the crash backtrace above. A metrics label node freed while still linked, then reallocated:
+  ```
+   chunk reused leaving garbage at +8  ->  dereference faults  ->  SIGSEGV
+                                           exit 139, restart, seconds lost
+                                           LOUD, COUNTED, SELF-HEALING
+   chunk reused as a valid node in a   ->  walk never meets   ->  INFINITE LOOP
+   DIFFERENT healthy ring                  its own head           one core, no restart,
+                                                                  MONTHS of total loss
+  ```
+  ⇒ **the segfault rate is a leading indicator of hang risk**, not cosmetic noise.
+  ⇒ fix category is **lifetime ownership** (unlink before free) + upstream lifecycle fixes, **not** error-path hardening.
+- **RETRACTED: "the error handling scribbled `403` over the list".** Wrong twice: `403` is a **legitimate label value** (`requests_total{status,name}`, `status` from `snprintf` of the HTTP status), and the neighbouring hostname string was **heap-adjacency noise** from strings the error path allocated at the same time. **Adjacency in a dump is not causation.** What settled it: every pointer in the ring was well-formed, aligned and mutually consistent with valid `prev` links, and **well-formed structures encoding a wrong graph is the signature of reuse, not overwriting.**
 - **Telemetry code is the crashiest part of a log agent and has nothing to do with logs** (Kubernetes-events input use-after-free on realloc, OTLP decoder NULL metric names, node/process exporter pointer bugs). Don't run metrics/events inputs in the instance whose job is shipping logs.
 - **A poison chunk survives the restart** — a crash while decoding buffered data replays on startup ⇒ a real crash loop with an external cause. See `storage.delete_irrecoverable_chunks`.
-- Crashes **restart** the container: loud, counted, self-healing. Hangs don't: silent, uncounted, permanent. On a fleet you get both from adjacent causes, and attention goes to the one that's already fixing itself.
+- Crashes **restart** the container: loud, counted, self-healing. Hangs don't: silent, uncounted, permanent. On a fleet you get both from the **same** cause, and attention goes to the one that's already fixing itself. Any time a self-healing failure sits next to a non-self-healing one, expect the investigation to anchor on the wrong one.
 - **The decoy:** the container is the **restart unit**. Pod-level restart counts hide which container died ⇒ anchoring trap. Exit codes: **137** SIGKILL (OOM / probe kill — usually *your* fix), **139** SIGSEGV (memory bug — usually *upstream's*), **143** SIGTERM, **1/2** app-level.
 - **Correlated instrument failure:** the telemetry container published the agent's throughput metrics, so during its crash-loop those series were **ABSENT, not zero** — and `rate(...) == 0` **never fires on absent series**. The only alert that could have caught the hang was silenced by a bug in its own reporting path.
 - **Worse on managed platforms:** there is *no user-visible per-node metric* for the GKE logging agent (`logging.googleapis.com/log_entry_count` has no node label; `kubernetes.io/node/logs/input_bytes` is input-side only; the agent's real counters land in Google-internal metric names). Unless you scrape `:2020` per node yourself, **a hung managed agent is undetectable by construction.**
@@ -125,7 +147,10 @@ TRIAGE ORDER (stop at first NO)
 STRACE CLASSIFICATION (the decisive test)
   ~10k+ read/recvfrom per sec, ALL EAGAIN -> level-triggered TLS spin (commonest)
   tight epoll_wait, timeout 0             -> ready-queue spin, fd never drained
-  NO syscalls at all, 100% CPU            -> pure userspace loop (parser/filter)
+  NO syscalls at all, 100% CPU            -> PURE USERSPACE LOOP  <-- the confirmed
+                                             one. empty table = positive finding.
+                                             confirm via utime/stime split, then
+                                             ptrace-sample the instruction pointer
   blocked write/read/futex, ~0% CPU       -> deadlock or saturated channel
   nanosleep + epoll_wait, slow rhythm     -> healthy idle
 

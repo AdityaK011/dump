@@ -51,6 +51,7 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | Summary | Full Note |
 |---------|-----------|
 | [[summaries/AuthNZ/oauth-oidc-and-workload-identity\|OAuth, OIDC & Workload Identity Federation]] | [[notes/AuthNZ/oauth-oidc-and-workload-identity\|Full notes -->]] |
+| [[summaries/AuthNZ/ssh-certificates-git-and-identity-order\|SSH Certificates, Git & Identity Order]] | [[notes/AuthNZ/ssh-certificates-git-and-identity-order\|Full notes -->]] |
 
 ## Learning
 

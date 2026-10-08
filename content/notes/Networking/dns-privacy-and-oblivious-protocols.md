@@ -51,3 +51,4 @@ This limitation directly shapes [[notes/Networking/icloud-private-relay-architec
 - [[notes/Networking/quic-and-masque|QUIC and MASQUE]] -- the transport and tunneling protocols that handle the streaming traffic OHTTP cannot
 - [[notes/Networking/icloud-private-relay-architecture|iCloud Private Relay Architecture]] -- how ODoH and OHTTP fit into the complete Private Relay flow
 - [[notes/Networking/cellular-networks-and-ip-addresses|Cellular Networks and IP Addresses]] -- the network layer that provides the IP addresses these protocols aim to hide
+- [[notes/K8s/cert-manager-acme-dns01-and-dns-delegation|cert-manager and ACME DNS-01]] -- authoritative vs recursive DNS, delegation, and how ACME uses DNS writes to prove domain control

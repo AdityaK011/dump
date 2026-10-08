@@ -1419,3 +1419,4 @@ In Istio, active health checking is not enabled by default. The primary health s
 - [[notes/K8s/istio-and-envoy-internals|Istio & Envoy Internals]]
 - [[notes/K8s/istio-traffic-management-and-security|Istio Traffic Management & Security]]
 - [[notes/K8s/service-mesh-multi-cluster-and-advanced-patterns|Service Mesh, Multi-Cluster & Advanced Patterns]]
+- [[notes/K8s/config-sync-rootsync-cluster-selectors-and-field-ownership|Config Sync at Fleet Scale]] — how a stale `istio-injection` label, kept alive by SSA co-ownership, overrides `istio.io/rev` and silently pins a namespace to the wrong revision

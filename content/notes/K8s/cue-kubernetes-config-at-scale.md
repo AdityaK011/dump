@@ -324,3 +324,4 @@ So the triage question when a tool misbehaves is always "which channel is this b
 - [[notes/Elasticsearch/elasticsearch-as-a-service-on-kubernetes|Elasticsearch as a Service on Kubernetes]] — what a platform *renders* on top of a config layer like this, including using a Job's existence as the idempotency record
 - [[notes/K8s/server-side-apply-replicas-collapse|SSA Deletes Your Replicas]] — what happens after the hydrated YAML reaches the API server: field ownership, apply semantics, and why "the manifest is correct" isn't enough
 - [[notes/K8s/kubebuilder-controllers-and-webhooks|Kubebuilder Controllers, Webhooks & Extension APIs]] — the CRD and reconcile-loop machinery behind the CD configuration that this pipeline actually writes
+- [[notes/K8s/config-sync-rootsync-cluster-selectors-and-field-ownership|Config Sync at Fleet Scale]] — the GitOps side of the pipeline: one repo across many clusters, cluster selectors, and the empty-cluster-name prune

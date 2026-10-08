@@ -40,3 +40,4 @@ The most scalable option. It supports certificate maps with thousands of entries
 
 - [[notes/K8s/gke-request-path-and-load-balancing|GKE Request Path and Load Balancing]]
 - [[notes/K8s/kubernetes-services-dns-and-network-policies|Kubernetes Services, DNS, and Network Policies]]
+- [[notes/K8s/cert-manager-acme-dns01-and-dns-delegation|cert-manager and ACME DNS-01]]

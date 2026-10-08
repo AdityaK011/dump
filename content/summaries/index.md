@@ -11,6 +11,7 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | [[summaries/K8s/gke-request-path-and-load-balancing\|GKE Request Path & Load Balancing]] | [[notes/K8s/gke-request-path-and-load-balancing\|Full notes -->]] |
 | [[summaries/K8s/kubernetes-services-dns-and-network-policies\|Services, DNS & Network Policies]] | [[notes/K8s/kubernetes-services-dns-and-network-policies\|Full notes -->]] |
 | [[summaries/K8s/ingress-vs-gateway-api\|Ingress vs Gateway API]] | [[notes/K8s/ingress-vs-gateway-api\|Full notes -->]] |
+| [[summaries/K8s/cert-manager-acme-dns01-and-dns-delegation\|cert-manager and ACME DNS-01]] | [[notes/K8s/cert-manager-acme-dns01-and-dns-delegation\|Full notes -->]] |
 | [[summaries/K8s/kubernetes-autoscaling\|Kubernetes Autoscaling]] | [[notes/K8s/kubernetes-autoscaling\|Full notes -->]] |
 | [[summaries/K8s/vpa-eviction-loops\|The VPA Eviction Loop]] | [[notes/K8s/vpa-eviction-loops\|Full notes -->]] |
 | [[summaries/K8s/server-side-apply-replicas-collapse\|SSA Deletes Your Replicas]] | [[notes/K8s/server-side-apply-replicas-collapse\|Full notes -->]] |

@@ -8,6 +8,9 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 - [[notes/K8s/gke-request-path-and-load-balancing|GKE Request Path & Load Balancing]] — How a request travels from browser to pod through GCP's global infrastructure
 - [[notes/K8s/ingress-vs-gateway-api|Ingress vs Gateway API]] — Two models for L7 load balancing on GKE, plus TLS certificate management
 
+## Certificates & DNS
+- [[notes/K8s/cert-manager-acme-dns01-and-dns-delegation|cert-manager and ACME DNS-01]] — Issuer vs ClusterIssuer, the Certificate → CertificateRequest → Order → Challenge chain, DNS fundamentals (zones, authoritative vs recursive, root hints, delegation, writes via API vs reads via DNS), the delegated `_acme-challenge` zone for least-privilege DNS writes, why ambient credentials are off for namespaced Issuers, and admission guardrails including the selector-less solver bypass
+
 ## Service Mesh & Networking
 - [[notes/K8s/kubernetes-services-dns-and-network-policies|Services, DNS & Network Policies]] — Service types, CoreDNS internals, ndots, and eBPF-based policy enforcement
 - [[notes/K8s/istio-and-envoy-internals|Istio & Envoy Internals]] — Control plane, xDS protocol, sidecar injection, Envoy request pipeline, threading model, filter chains

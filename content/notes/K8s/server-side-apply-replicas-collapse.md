@@ -187,3 +187,5 @@ And independently, give the workload enough memory headroom (split `requests` fr
 - **Read `managedFields` and the audit log.** Deployment-level events describe the *symptom* (frantic scaling); ownership metadata and the audit principal reveal the *cause* (who deleted/wrote `replicas`, and when).
 
 For the autoscaler side of ownership and how the HPA writes `replicas` through the `/scale` subresource, see [[notes/K8s/kubernetes-autoscaling|Kubernetes Autoscaling]]. For another "the autoscaler did something nobody triggered" failure that's really a controller-ownership problem, see [[notes/K8s/vpa-eviction-loops|The VPA Eviction Loop]]. And for where the manifest that gets applied here actually comes from — a CUE config monorepo hydrated into committed YAML, with the CD configuration as the only thing CI writes — see [[notes/K8s/cue-kubernetes-config-at-scale|CUE-Based Kubernetes Config at Scale]].
+
+For the opposite SSA surprise, where a field removed from the manifest refuses to disappear because a second manager (Terraform) still co-owns it, see [[notes/K8s/config-sync-rootsync-cluster-selectors-and-field-ownership|Config Sync at Fleet Scale]].

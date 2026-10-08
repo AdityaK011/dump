@@ -32,6 +32,8 @@ Notes on Kubernetes internals, GKE platform engineering, networking, autoscaling
 ## Configuration & Continuous Delivery
 - [[notes/K8s/cue-kubernetes-config-at-scale|CUE-Based Kubernetes Config at Scale]] — How a hundreds-of-services config monorepo works when CUE compiles ("hydrates") into committed YAML that a GitOps controller syncs: unification vs templating, the `Delivery` key as the unit of hydration/deployment/image-automation/pruning, why plan is a merge-base git diff and apply only upserts a CD configuration CRD, the three independent deletion mechanisms plus the hydration gap that leaves dead folders behind, and a four-layer CI failure where renaming `generateName` to `name` broke a prune-time CUE interpolation — with the real fix living in a `go:embed`'d binary rather than the vendored CUE everyone was editing
 
+- [[notes/K8s/config-sync-rootsync-cluster-selectors-and-field-ownership|Config Sync at Fleet Scale]] — RootSync and the reconciler pipeline, sharing one repo across clusters, why `Cluster` + `ClusterSelector` add an indirection, how an empty `--cluster-name` prunes every selector-targeted object that isn't detached, forward-proxy egress for git-sync with a fixed IP, and the SSA co-ownership gotcha where a label removed from git survives because Terraform still owns it, leaving `istio-injection` to override `istio.io/rev`
+
 ## Operators & Extension APIs
 - [[notes/K8s/kubebuilder-controllers-and-webhooks|Kubebuilder Controllers, Webhooks & Extension APIs]] — Reconcile loops, CRD versioning, admission webhooks, extension API servers
 

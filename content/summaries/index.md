@@ -74,3 +74,4 @@ Quick-reference summaries for fast recall. Each summary links to its full note.
 | [[summaries/Linux/linux-fundamentals-architecture-and-debugging\|Linux Fundamentals, Architecture & Debugging]] | [[notes/Linux/linux-fundamentals-architecture-and-debugging\|Full notes -->]] |
 | [[summaries/Linux/booting-linux-on-a-windows-pc\|Booting Linux on a Windows PC]] | [[notes/Linux/booting-linux-on-a-windows-pc\|Full notes -->]] |
 | [[summaries/Linux/anatomy-of-a-userspace-hang\|Anatomy of a Userspace Hang]] | [[notes/Linux/anatomy-of-a-userspace-hang\|Full notes -->]] |
+| [[summaries/Linux/blas-worker-thread-spin-wait\|Why a BLAS Worker Thread Doubled Our Inference CPU]] | [[notes/Linux/blas-worker-thread-spin-wait\|Full notes -->]] |

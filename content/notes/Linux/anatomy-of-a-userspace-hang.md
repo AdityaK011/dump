@@ -1706,6 +1706,7 @@ The meta-lesson I would offer is about which signal we trusted. The loud symptom
 
 - [[notes/K8s/node-log-pipeline-silent-failures|Alive But Not Shipping]] — the operational half of this story: the full log pipeline, why the blast radius was node-shaped, the probes and alerts that missed it, and the two unrelated failure modes it was tangled up with
 - [[notes/Linux/linux-fundamentals-architecture-and-debugging|Linux Fundamentals, Architecture & Debugging]] — the wider map: boot, kernel subsystems, cgroups, namespaces, and where each debugging tool attaches
+- [[notes/Linux/blas-worker-thread-spin-wait|Why a BLAS Worker Thread Doubled Our Inference CPU]] — the kernel-time sibling: worker threads at a full core each inside a `sched_yield` loop, and how a fixed per-pod floor pinned an HPA
 - [[notes/Networking/tcp-socket-internals|TCP Socket Internals]] — sockets, `epoll`, non-blocking I/O and `EAGAIN`, which is the syscall-spin sibling of this hang
 - [[notes/K8s/interactive-containers-piping-and-ttys|Interactive Containers, Piping & TTYs]] — what `kubectl exec` and `kubectl debug` are doing underneath, and how namespaces are joined
 - [[notes/K8s/when-gauge-sums-lie|When Gauge Sums Lie]] — the other way instrumentation misleads you, at query time rather than in the process

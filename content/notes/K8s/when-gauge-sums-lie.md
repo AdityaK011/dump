@@ -315,3 +315,4 @@ What pre-aggregation does **not** solve is Act 3 — it's still a leader-elected
 
 - [[notes/K8s/node-log-pipeline-silent-failures|Alive But Not Shipping]] — the logging counterpart: a node's log agent stalls with zero errors, and the alert that would have caught it is silenced when its metrics exporter dies and the series goes *absent* rather than zero
 - [[notes/K8s/kubernetes-autoscaling|Kubernetes Autoscaling]] — where the pod and node churn that produces ghost series comes from
+- [[notes/Linux/blas-worker-thread-spin-wait|Why a BLAS Worker Thread Doubled Our Inference CPU]] — the same averaging traps (across containers, over churning pods, avg of ratios) while sizing a CPU regression

@@ -51,6 +51,7 @@ KEDA (CNCF graduated project) extends HPA with **70+ event-driven triggers** inc
 ## Related notes
 
 - [[notes/K8s/service-mesh-multi-cluster-and-advanced-patterns|Service Mesh, Multi-Cluster, and Advanced Patterns]]
+- [[notes/Linux/blas-worker-thread-spin-wait|Why a BLAS Worker Thread Doubled Our Inference CPU]]: how a load-independent per-pod CPU floor pins an `AverageValue` HPA at `maxReplicas`
 - [[notes/K8s/gke-networking-and-load-balancing|GKE Networking and Load Balancing]]
 - [[notes/K8s/kubernetes-networking-internals|Kubernetes Networking Internals]]
 - [[notes/K8s/gke-ingress-and-gateway-api|GKE Ingress and Gateway API]]

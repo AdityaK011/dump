@@ -243,3 +243,4 @@ My setup script copied a bundled `~/.ssh/config` onto the new machine on every r
 
 - [[notes/AuthNZ/oauth-oidc-and-workload-identity|OAuth, OIDC & Workload Identity Federation]]: SSO, SAML and identity federation, the other half of why the org rejected the plain key
 - [[notes/Networking/tls-1.3-handshake|TLS 1.3 Handshake]]: another protocol where authentication finishes before the application decides what you're allowed to do
+- [[notes/Git/stale-pull-request-head-after-update-branch|The Pull Request That Forgot Its Head]]: what happens on GitHub's side after a push lands, and how a pull request's copy of its head SHA can fall behind the branch

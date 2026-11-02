@@ -13,3 +13,4 @@ Detailed technical notes organized by topic.
 - [[notes/Learning/index|Learning]] — Reading plans and study guides
 - [[notes/AI-Tooling/index|AI Tooling]] — Claude Code internals, agent frameworks, and LLM infrastructure
 - [[notes/Linux/index|Linux]] — Kernel internals, boot sequence, debugging methodology, disk management, and system administration
+- [[notes/Git/index|Git & GitHub]] — Refs and history, pull request mechanics, CI triggers, and merge automation
